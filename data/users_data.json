@@ -1,0 +1,86 @@
+{
+  "29ca2446da80b1df": {
+    "display_name": "King",
+    "age": 22,
+    "domain": "Health",
+    "goal": "loose weight",
+    "skill": "Beginner",
+    "hours": 1.5,
+    "health": "",
+    "last_seen": "2026-03-21T18:50:55.225051",
+    "sessions": 5,
+    "completed": [
+      "Advanced sports nutrition",
+      "Micronutrient deficiencies and treatment",
+      "Understanding trauma and PTSD",
+      "Fruits and vegetables in daily diet",
+      "Healthy breakfast habits",
+      "Understanding junk food and processed food",
+      "Indian diet and nutrition basics",
+      "Portion control basics",
+      "Meal timing and eating schedule",
+      "Basic bodyweight exercises",
+      "Understanding food labels and calories",
+      "The six essential nutrients",
+      "Importance of hydration",
+      "Healthy snacking habits"
+    ],
+    "total_topics": 68,
+    "badges": [
+      "First 5",
+      "10 Topics"
+    ],
+    "streak_days": 4
+  },
+  "1cf6635805413ebc": {
+    "display_name": "adfdsf",
+    "age": 22,
+    "domain": "Education",
+    "goal": "loose weight",
+    "skill": "Intermediate",
+    "hours": 1.5,
+    "health": "",
+    "last_seen": "2026-03-21T14:05:08.161620",
+    "completed": [],
+    "total_topics": 81,
+    "sessions": 12
+  },
+  "1adf8882d37cff84": {
+    "display_name": "King",
+    "age": 55,
+    "domain": "Health",
+    "goal": "loose weight",
+    "skill": "Beginner",
+    "hours": 2.0,
+    "health": "",
+    "last_seen": "2026-03-21T14:40:56.691109",
+    "sessions": 1,
+    "completed": [],
+    "total_topics": 69,
+    "badges": [],
+    "streak_days": 1
+  },
+  "a1cb7ff046f30086": {
+    "display_name": "King",
+    "age": 24,
+    "domain": "Entrepreneurship",
+    "goal": "startup funding",
+    "skill": "Advanced",
+    "hours": 4.0,
+    "health": "",
+    "last_seen": "2026-03-21T14:46:49.943018",
+    "sessions": 2,
+    "completed": [
+      "Terrace and rooftop gardening",
+      "Vegetable gardening basics",
+      "Raised bed gardening",
+      "Pruning and training plants",
+      "Spices and flavour building"
+    ],
+    "total_topics": 57,
+    "badges": [
+      "First 5"
+    ],
+    "streak_days": 2
+  }
+}
