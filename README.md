@@ -1,1 +1,1 @@
-# AI-Learning-Path-Recommendation-System
+# AI-Learning-Path
