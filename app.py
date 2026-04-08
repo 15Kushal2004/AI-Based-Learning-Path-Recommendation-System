@@ -1,4 +1,4 @@
-# ================================================================
+﻿# ================================================================
 #  app.py — Dashboard
 #  Run: streamlit run app.py
 # ================================================================
@@ -21,7 +21,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# ── INJECT CSS ──────────────────────────────────────────────
+# ── INJECT CSS ───────────────────────────────────────────
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@600;700;800&display=swap');
@@ -60,7 +60,7 @@ html, body, [class*="css"] {
     cursor: default !important;
 }
 .stSelectbox > div > div {
-    background: #f8fafc !important; border: 1.5px solid #e2e8f0 !important;
+    background: #f8fafc !important; border: 1.5px solid #e2e8f0 !important
     border-radius: 10px !important; color: #1e293b !important;
 }
 .stSelectbox > div > div > div {
@@ -662,5 +662,4 @@ with right:
               <div style="font-size:.71rem;color:#64748b">📁 {r['category']} · ⏱ {r['duration']}h</div>
             </div>""", unsafe_allow_html=True)
         st.markdown('</div>', unsafe_allow_html=True)
-
 

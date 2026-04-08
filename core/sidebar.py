@@ -1,17 +1,30 @@
-import streamlit as st
+﻿import streamlit as st
 
 def render_sidebar():
-    # Hide Streamlit's default page navigation
+    # Hide Streamlit's default page navigation and the built-in sidebar toggle (<<)
     st.markdown("""
     <style>
     [data-testid="stSidebarContent"] > ul { display: none !important; }
     [data-testid="stSidebarContent"] > div > ul { display: none !important; }
+
+    /* Hide Streamlit default collapse/expand button */
+    [data-testid="collapsedControl"], button[aria-label="Toggle sidebar"] {
+      display: none !important;
+      visibility: hidden !important;
+      pointer-events: none !important;
+    }
+
+    /* Keep sidebar always expanded */
+    [data-testid="stSidebar"] {
+      transform: translateX(0) !important;
+      width: 18rem !important;
+      min-width: 18rem !important;
+    }
+
+    /* Page content offset for sidebar width */
+    .css-18e3th9 { margin-left: 18rem !important; }
     </style>
     """, unsafe_allow_html=True)
-    
-    # Initialize sidebar state
-    if "sidebar_collapsed" not in st.session_state:
-        st.session_state.sidebar_collapsed = False
     
     with st.sidebar:
         st.markdown("""
@@ -22,6 +35,9 @@ def render_sidebar():
             <div style="font-size:.65rem;color:#64748b">Adaptive Learning System</div>
           </div>
         </div>
+        """, unsafe_allow_html=True)
+        
+        st.markdown("""
         <div style="font-size:.62rem;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.1em;margin-bottom:8px">MAIN MENU</div>
         """, unsafe_allow_html=True)
         st.page_link("app.py",                 label="📊  Dashboard")
@@ -32,6 +48,3 @@ def render_sidebar():
         st.page_link("pages/6_Certificates.py",label="🏅  Certificates")
         st.page_link("pages/7_Analytics.py",   label="📉  Analytics")
         st.page_link("pages/8_Settings.py",    label="⚙️  Settings")
-        st.markdown("<br><br>", unsafe_allow_html=True)
-        if st.button("🤖 AI Coach - Get Guidance →", use_container_width=True, key="ai_coach_btn"):
-            st.switch_page("pages/9_AICoach.py")
