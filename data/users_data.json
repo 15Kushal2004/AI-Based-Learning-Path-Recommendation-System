@@ -259,5 +259,80 @@
     "total_topics": 5,
     "badges": [],
     "streak_days": 1
+  },
+  "7c2d1d6e316a336a": {
+    "display_name": "Disha Rani",
+    "age": 22,
+    "domain": "Hobbies",
+    "goal": "Learn Cooking",
+    "skill": "Intermediate",
+    "hours": 1.0,
+    "health": "",
+    "last_seen": "2026-04-09T17:17:13.563007",
+    "sessions": 2,
+    "completed": [
+      "What is entrepreneurship",
+      "Difference between job and business",
+      "Types of businesses",
+      "Introduction to business vocabulary",
+      "Cooking for special diets",
+      "Making simple Indian meals",
+      "Indian regional cuisine South India",
+      "Baking breads and fermented doughs",
+      "Baking cakes and pastries",
+      "Spices and flavour building",
+      "Meal prep for the week"
+    ],
+    "total_topics": 18,
+    "badges": [
+      "First 5",
+      "10 Topics"
+    ],
+    "streak_days": 2
+  },
+  "45e50d5e56903851": {
+    "display_name": "Disha Rani",
+    "age": 52,
+    "domain": "Hobbies",
+    "goal": "learn communication",
+    "skill": "Beginner",
+    "hours": 3.0,
+    "health": "",
+    "last_seen": "2026-04-12T20:39:52.453944",
+    "sessions": 14,
+    "completed": [],
+    "total_topics": 86,
+    "badges": [],
+    "streak_days": 14
+  },
+  "9f953d7471840ac8": {
+    "display_name": "King",
+    "age": 21,
+    "domain": "Entrepreneurship",
+    "goal": "startup",
+    "skill": "Beginner",
+    "hours": 2.0,
+    "health": "",
+    "last_seen": "2026-04-21T00:44:06.153528",
+    "sessions": 5,
+    "completed": [],
+    "total_topics": 14,
+    "badges": [],
+    "streak_days": 5
+  },
+  "e3289ef226f593d0": {
+    "display_name": "King",
+    "age": 45,
+    "domain": "Entrepreneurship",
+    "goal": "startup",
+    "skill": "Beginner",
+    "hours": 2.0,
+    "health": "",
+    "last_seen": "2026-04-21T16:42:22.574710",
+    "sessions": 29,
+    "completed": [],
+    "total_topics": 14,
+    "badges": [],
+    "streak_days": 29
   }
 }

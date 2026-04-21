@@ -7,7 +7,6 @@ sys.path.insert(0, os.path.dirname(__file__))
 import streamlit as st
 import pandas as pd
 import json
-import re
 from collections import defaultdict
 from core.engine import (load_kb, generate_roadmap, upsert_user,
                           get_user, CLUSTERS, goal_domain_mismatch,
@@ -213,37 +212,14 @@ if gen:
 
         # ✅ 🔥 ADD W&B LOGGING HERE ONLY
 
-        def _meaningful_words(text):
-            return {w for w in re.findall(r"[a-zA-Z]+", (text or "").lower()) if len(w) >= 3}
+        goal_match = 1 if domain in result.get("domain", "") else 0
 
-        roadmap_items = result.get("roadmap", [])
-        roadmap_len = len(roadmap_items)
+        relevance = sum(
+            1 for t in result["roadmap"]
+            if any(word in t["topic"].lower() for word in goal.lower().split())
+        ) / len(result["roadmap"])
 
-        goal_words = _meaningful_words(goal)
-        overlap_scores = []
-        for item in roadmap_items:
-            topic_words = _meaningful_words(item.get("topic", ""))
-            if not goal_words:
-                overlap_scores.append(0.0)
-                continue
-            overlap_scores.append(len(goal_words & topic_words) / len(goal_words))
-
-        relevance = (sum(overlap_scores) / roadmap_len) if roadmap_len > 0 else 0.0
-
-        goal_match = 1 if domain == result.get("domain", "") else 0
-        if st.session_state.get("user_uid"):
-            try:
-                current_user = get_user_by_uid(st.session_state["user_uid"]) or {}
-            except Exception:
-                current_user = {}
-        else:
-            current_user = get_user(name or "Learner", age) or {}
-
-        done_topics = current_user.get("completed", []) if isinstance(current_user, dict) else []
-        completion_rate = (
-            len([t for t in roadmap_items if t.get("topic") in done_topics]) / roadmap_len
-            if roadmap_len > 0 else 0.0
-        )
+        completion_rate = 0
 
         import wandb
         wandb.log({
@@ -290,7 +266,7 @@ if not st.session_state.generated:
       <div class="stat-card"><div class="stat-icon" style="background:rgba(245,158,11,0.15)">🌐</div>
         <div class="stat-num">4</div><div class="stat-lbl">Domains</div></div>
       <div class="stat-card"><div class="stat-icon" style="background:rgba(236,72,153,0.15)">🤖</div>
-        <div class="stat-num">5</div><div class="stat-lbl">AI ML Modules</div></div>
+        <div class="stat-num">5</div><div class="stat-lbl">AI Modules</div></div>
     </div>""", unsafe_allow_html=True)
 
     icons = {"Education":"🎓","Entrepreneurship":"💼","Health":"💪","Hobbies":"🎨"}

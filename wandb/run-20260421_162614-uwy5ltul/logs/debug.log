@@ -1,0 +1,5 @@
+2026-04-21 16:26:14,859 INFO    ScriptRunner.scriptThread:29540 [wandb_init.py:setup_run_log_directory():721] Logging user logs to C:\Users\KING\Desktop\AI Model\wandb\run-20260421_162614-uwy5ltul\logs\debug.log
+2026-04-21 16:26:14,861 INFO    ScriptRunner.scriptThread:29540 [wandb_init.py:setup_run_log_directory():722] Logging internal logs to C:\Users\KING\Desktop\AI Model\wandb\run-20260421_162614-uwy5ltul\logs\debug-internal.log
+2026-04-21 16:26:14,861 INFO    ScriptRunner.scriptThread:29540 [wandb_init.py:init():848] calling init triggers
+2026-04-21 16:26:14,862 INFO    ScriptRunner.scriptThread:29540 [wandb_init.py:init():853] wandb.init called with sweep_config: {}
+config: {'_wandb': {}}
