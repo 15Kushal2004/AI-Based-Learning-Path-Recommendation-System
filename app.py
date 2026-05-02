@@ -1,18 +1,26 @@
-﻿# ================================================================
+# ================================================================
 #  app.py — Dashboard
 #  Run: streamlit run app.py
 # ================================================================
 import sys, os
 sys.path.insert(0, os.path.dirname(__file__))
-
 import streamlit as st
 import pandas as pd
 import json
+import re
 from collections import defaultdict
 from core.engine import (load_kb, generate_roadmap, upsert_user,
                           get_user, CLUSTERS, goal_domain_mismatch,
                           toggle_topic, get_all_users_summary)
 from core.sidebar import render_sidebar
+from utils.firebase_storage import (save_roadmap, get_user_by_uid,
+                                      toggle_topic_firestore,
+                                      get_all_users_firestore,
+                                      get_all_user_roadmaps)
+
+# Testing
+import wandb
+wandb.init(project="ai-learning-path", name="test-run")
 
 st.set_page_config(
     page_title="LearnPath AI — Dashboard",
@@ -21,229 +29,15 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# ── INJECT CSS ───────────────────────────────────────────
-st.markdown("""
-<style>
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@600;700;800&display=swap');
+# ── INJECT PREMIUM CSS ────────────────────────────────────────
+from ui.theme import PREMIUM_CSS
+st.markdown(PREMIUM_CSS, unsafe_allow_html=True)
 
-html, body, [class*="css"] {
-    font-family: 'Inter', sans-serif !important;
-    background: #f0f4ff !important;
-}
-.stApp { background: #f0f4ff !important; }
 
-/* Sidebar styling */
-[data-testid="stSidebar"] {
-    background: linear-gradient(180deg, #0f172a 0%, #1e1b4b 100%) !important;
-    min-width: 240px !important;
-}
-[data-testid="stSidebar"] * { color: #94a3b8 !important; }
-[data-testid="stSidebarContent"] { padding: 1rem 0.8rem !important; }
 
-/* Main content */
-.block-container { padding: 2rem 2.5rem 2rem 2.5rem !important; max-width: 100% !important; }
-#MainMenu, footer, header { visibility: hidden; }
-
-/* Form inputs */
-.stTextInput > div > div > input {
-    background: #f8fafc !important; border: 1.5px solid #e2e8f0 !important;
-    border-radius: 10px !important; color: #1e293b !important; font-size: .88rem !important;
-}
-.stTextInput > div > div > input::placeholder {
-    color: #94a3b8 !important;
-}
-.stTextInput > div > div > input:focus {
-    border-color: #6366f1 !important; box-shadow: 0 0 0 3px #6366f120 !important;
-}
-.stTextInput > div > div > input:disabled {
-    background: #f1f5f9 !important; color: #1e293b !important; border-color: #cbd5e1 !important;
-    cursor: default !important;
-}
-.stSelectbox > div > div {
-    background: #f8fafc !important; border: 1.5px solid #e2e8f0 !important
-    border-radius: 10px !important; color: #1e293b !important;
-}
-.stSelectbox > div > div > div {
-    color: #1e293b !important;
-}
-.stNumberInput > div > div > input {
-    background: #f8fafc !important; border: 1.5px solid #e2e8f0 !important;
-    border-radius: 10px !important; color: #1e293b !important;
-}
-.stNumberInput > div > div > input::placeholder {
-    color: #94a3b8 !important;
-}
-div[data-baseweb="select"] > div {
-    background: #f8fafc !important; border: 1.5px solid #e2e8f0 !important;
-    border-radius: 10px !important; color: #1e293b !important;
-    position: relative !important;
-}
-div[data-baseweb="select"] > div::after {
-    content: '▼' !important;
-    position: absolute !important;
-    right: 12px !important;
-    top: 50% !important;
-    transform: translateY(-50%) !important;
-    pointer-events: none !important;
-    font-size: 0.65rem !important;
-    color: #94a3b8 !important;
-}
-div[data-baseweb="select"] > div > div {
-    color: #1e293b !important;
-    padding-right: 28px !important;
-}
-div[data-baseweb="select"]::after {
-    content: '▼' !important;
-}
-label { color: #475569 !important; font-size: .78rem !important; font-weight: 600 !important; }
-
-/* Buttons */
-.stButton > button {
-    background: linear-gradient(135deg, #10b981, #059669) !important;
-    color: white !important; border: none !important;
-    border-radius: 12px !important; font-weight: 700 !important;
-    font-size: .95rem !important; padding: 0.6rem 1.5rem !important;
-    font-family: 'Plus Jakarta Sans', sans-serif !important;
-    transition: all .2s !important;
-}
-.stButton > button:hover {
-    transform: translateY(-1px) !important;
-    box-shadow: 0 6px 20px #10b98144 !important;
-}
-.stDownloadButton > button {
-    background: white !important; border: 1.5px solid #e2e8f0 !important;
-    color: #6366f1 !important; font-weight: 600 !important;
-    border-radius: 10px !important;
-}
-/* Tabs */
-.stTabs [data-baseweb="tab-list"] {
-    background: #e8edf5 !important; border-radius: 12px !important;
-    padding: 4px !important; gap: 3px !important;
-}
-.stTabs [data-baseweb="tab"] {
-    background: transparent !important; border-radius: 8px !important;
-    color: #64748b !important; font-weight: 500 !important;
-    padding: 8px 18px !important; font-size: .84rem !important;
-}
-.stTabs [aria-selected="true"] {
-    background: white !important; color: #6366f1 !important;
-    font-weight: 700 !important; box-shadow: 0 1px 4px rgba(0,0,0,.1) !important;
-}
-.stCheckbox > label > div { border-color: #c4b5fd !important; }
-.stSlider > div > div > div > div {
-    background: linear-gradient(90deg, #6366f1, #8b5cf6) !important;
-}
-
-/* Cards */
-.card {
-    background: white; border: 1.5px solid #e2e8f0;
-    border-radius: 18px; padding: 22px;
-    box-shadow: 0 1px 4px rgba(0,0,0,.05); margin-bottom: 16px;
-}
-.card-title {
-    font-family: 'Plus Jakarta Sans', sans-serif;
-    font-size: 1rem; font-weight: 700; color: #0f172a; margin-bottom: 4px;
-}
-.card-sub { font-size: .76rem; color: #64748b; margin-bottom: 16px; }
-
-/* Stats */
-.stat-grid { display: grid; grid-template-columns: repeat(4,1fr); gap: 14px; margin-bottom: 18px; }
-.stat-card {
-    background: white; border: 1.5px solid #e2e8f0; border-radius: 16px;
-    padding: 18px; position: relative; overflow: hidden;
-    box-shadow: 0 1px 3px rgba(0,0,0,.04);
-}
-.stat-card::before {
-    content: ''; position: absolute; top: 0; left: 0; right: 0;
-    height: 3px; background: linear-gradient(90deg, #6366f1, #8b5cf6);
-}
-.stat-icon {
-    width: 38px; height: 38px; border-radius: 10px;
-    display: flex; align-items: center; justify-content: center;
-    font-size: 1.1rem; margin-bottom: 10px;
-}
-.stat-num {
-    font-family: 'Plus Jakarta Sans', sans-serif;
-    font-size: 1.9rem; font-weight: 800; color: #0f172a; line-height: 1;
-}
-.stat-lbl { font-size: .71rem; color: #64748b; font-weight: 500; margin-top: 4px; }
-
-/* Week label */
-.wk { display: inline-flex; align-items: center; gap: 6px;
-    background: linear-gradient(135deg,#ede9fe,#ddd6fe);
-    border: 1px solid #c4b5fd; border-radius: 8px;
-    padding: 5px 14px; margin: 10px 0 5px;
-    font-family: 'Plus Jakarta Sans',sans-serif;
-    font-size: .78rem; font-weight: 700; color: #5b21b6; }
-
-/* Topic row */
-.trow { display: flex; align-items: center; gap: 10px;
-    background: #f8fafc; border: 1.5px solid #e2e8f0;
-    border-radius: 10px; padding: 9px 13px; margin: 4px 0; }
-.trow.done { background: #f0fdf4; border-color: #bbf7d0; }
-.tstep { background: #ede9fe; color: #6d28d9; font-size: .65rem;
-    font-weight: 800; width: 22px; height: 22px; border-radius: 5px;
-    display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
-.tname { flex: 1; font-size: .84rem; font-weight: 500; color: #1e293b; }
-.tname.done { text-decoration: line-through; color: #94a3b8; }
-.tcat { background: #e0e7ff; color: #4338ca; font-size: .64rem;
-    font-weight: 600; padding: 2px 7px; border-radius: 4px; }
-.tdur { font-size: .73rem; font-weight: 700; color: #8b5cf6; min-width: 30px; text-align: right; }
-.lbeg { background: #dcfce7; color: #15803d; font-size: .6rem; font-weight: 700; padding: 2px 6px; border-radius: 3px; }
-.lint { background: #dbeafe; color: #1d4ed8; font-size: .6rem; font-weight: 700; padding: 2px 6px; border-radius: 3px; }
-.ladv { background: #fef3c7; color: #b45309; font-size: .6rem; font-weight: 700; padding: 2px 6px; border-radius: 3px; }
-
-/* Cluster */
-.cl-ban { border-radius: 14px; padding: 14px 20px; margin-bottom: 18px;
-    display: flex; align-items: center; gap: 14px; border: 1.5px solid; }
-
-/* Progress bar */
-.pb { background: #f1f5f9; border-radius: 6px; height: 7px; overflow: hidden; }
-.pbf { height: 100%; border-radius: 6px; }
-
-/* Skill row */
-.skrow { margin-bottom: 11px; }
-.sktop { display: flex; justify-content: space-between; margin-bottom: 3px; }
-.skname { font-size: .78rem; font-weight: 500; color: #374151;
-    display: flex; align-items: center; gap: 6px; }
-.skpct { font-size: .78rem; font-weight: 700; }
-
-/* Divider */
-.fdiv { height: 1px; background: linear-gradient(90deg,transparent,#e2e8f0,transparent); margin: 18px 0; }
-
-/* Alert */
-.awarn { background: #fef9c3; border: 1.5px solid #fde68a; border-radius: 10px;
-    padding: 12px 16px; margin: 10px 0; font-size: .82rem; color: #713f12; }
-.ainfo { background: #e0f2fe; border: 1.5px solid #bae6fd; border-radius: 10px;
-    padding: 12px 16px; margin: 10px 0; font-size: .82rem; color: #0c4a6e; }
-.asuc  { background: #dcfce7; border: 1.5px solid #bbf7d0; border-radius: 10px;
-    padding: 12px 16px; margin: 10px 0; font-size: .82rem; color: #14532d; }
-
-/* Resource */
-.res { display: flex; align-items: center; gap: 12px;
-    background: #f8fafc; border: 1.5px solid #e2e8f0; border-radius: 12px;
-    padding: 10px 14px; margin: 7px 0; }
-.res-btn { background: linear-gradient(135deg,#6366f1,#8b5cf6); color: white;
-    border: none; border-radius: 7px; padding: 5px 12px; font-size: .7rem;
-    font-weight: 600; text-decoration: none; flex-shrink: 0; margin-left: auto; }
-
-/* Sched */
-.sched { display: grid; grid-template-columns: repeat(7,1fr); gap: 6px; margin-top: 10px; }
-.sdlbl { font-size: .63rem; font-weight: 600; color: #94a3b8; text-align: center; margin-bottom: 3px; }
-.sdslot { border-radius: 7px; padding: 7px 3px; font-size: .69rem; font-weight: 600; text-align: center; }
-.sdslot.a { background: linear-gradient(135deg,#6366f1,#8b5cf6); color: white; }
-.sdslot.r { background: #ede9fe; color: #6d28d9; }
-.sdslot.x { background: #f1f5f9; color: #94a3b8; }
-
-/* Roadmap preview */
-.rpnode { display: flex; align-items: center; gap: 10px; margin: 4px 0; }
-.rpdot { width: 28px; height: 28px; border-radius: 50%; display: flex; align-items: center;
-    justify-content: center; font-size: .7rem; font-weight: 700; color: white;
-    flex-shrink: 0; box-shadow: 0 2px 6px rgba(0,0,0,.12); }
-.rpline { width: 2px; height: 16px; background: #e2e8f0; margin-left: 13px; }
-.rplbl { font-size: .79rem; font-weight: 500; color: #374151; flex: 1; }
-</style>
-""", unsafe_allow_html=True)
+# ── AUTH GUARD ───────────────────────────────────────────────
+from utils.session_manager import auth_guard
+auth_guard()
 
 # ── SESSION STATE ────────────────────────────────────────────
 for k, v in [("generated", False), ("result", None), ("name", ""),
@@ -260,43 +54,105 @@ name_d   = st.session_state.name or "Learner"
 initials = "".join(w[0].upper() for w in name_d.split()[:2]) or "L"
 goal_d   = st.session_state.goal or "No goal set"
 
-# Add sidebar toggle button in top-right corner with expand hint
-top_left, top_mid, top_right = st.columns([2.5, 0.5, 1])
-with top_left:
+# Top bar: feature badges + user pill
+# 🔥 HEADER (FIXED ALIGNMENT)
+col1, col2 = st.columns([5, 1])
+
+with col1:
+  st.markdown("""
+<style>
+.typing-small {
+  display: inline-block;
+  white-space: nowrap;
+  overflow: hidden;
+  font-size: 2rem;
+  font-weight: 600;
+
+  border-right: 2px solid #8b5cf6;
+
+  width: 0;
+  animation: typing 3s steps(40, end) forwards,
+             blink 0.8s infinite;
+}
+
+/* 🔥 IMPORTANT: width goes to exact characters */
+@keyframes typing {
+  from { width: 0 }
+  to { width: 38ch; }   /* 🔥 CHANGE THIS */
+}
+
+@keyframes blink {
+  50% { border-color: transparent }
+}
+</style>
+""", unsafe_allow_html=True)
+   
+st.markdown("""
+<div class="typing-small" style="margin-top:-30px;">
+🎯 Make Your Learning Journey Personalized
+</div>
+""", unsafe_allow_html=True)
+
+with col2:
     st.markdown(f"""
-    <div style="margin-bottom:4px">
-      <div style="font-family:'Plus Jakarta Sans',sans-serif;font-size:1.7rem;font-weight:800;color:#0f172a">Welcome, {name_d}! 👋</div>
-      <div style="color:#64748b;font-size:.86rem">Let's build your personalized learning path</div>
-    </div>""", unsafe_allow_html=True)
+    <div style="display:flex;justify-content:flex-end;">
+        <div style="display:flex;align-items:center;gap:8px;
+            background:rgba(255,255,255,0.04);
+            border:1px solid rgba(255,255,255,0.08);
+            border-radius:50px;
+            padding:5px 14px 5px 5px;">
+          <div style="width:32px;height:32px;border-radius:50%;
+              background:linear-gradient(135deg,#6366f1,#818cf8);
+              display:flex;align-items:center;justify-content:center;
+              color:white;font-weight:600;font-size:.78rem">{initials}</div>
+          <div>
+            <div style="font-size:.8rem;font-weight:600;color:#e2e8f0">Hi, {name_d}</div>
+            <div style="font-size:.66rem;color:rgba(255,255,255,0.35)">{goal_d[:25]}</div>
+          </div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
 
-with top_mid:
-    st.markdown("""
-    <div style="display:flex;align-items:center;justify-content:center;height:100%">
-      <div style="font-size:1.2rem;color:#94a3b8;cursor:help;title='Click hamburger menu at top-left to expand sidebar'"></div>
-    </div>""", unsafe_allow_html=True)
 
-with top_right:
-    st.markdown(f"""
-    <div style="display:flex;align-items:center;gap:8px;background:white;border:1.5px solid #e2e8f0;border-radius:50px;padding:5px 14px 5px 5px;float:right">
-      <div style="width:34px;height:34px;border-radius:50%;background:linear-gradient(135deg,#6366f1,#8b5cf6);display:flex;align-items:center;justify-content:center;color:white;font-weight:700;font-size:.82rem">{initials}</div>
-      <div>
-        <div style="font-size:.82rem;font-weight:600;color:#1e293b">{name_d}</div>
-        <div style="font-size:.68rem;color:#64748b">{goal_d[:25]}</div>
-      </div>
-    </div>""", unsafe_allow_html=True)
+ 
+# Welcome section
+st.markdown("""
+<style>
+.wave {
+  display: inline-block;
+  font-size: 1.7rem;
+  transform-origin: 70% 70%;
+  animation: waveReal 2.8s infinite;
+}
 
-# Step bar
-steps = ["1. Profile","2. Skill Assessment","3. Roadmap","4. Learning"]
-step  = 4 if st.session_state.generated else 1
-step_html = ""
-for i, s in enumerate(steps, 1):
-    n_cls = "#6366f1" if i <= step else "#f1f5f9"
-    t_cls = "#6366f1" if i == step else ("#94a3b8" if i > step else "#374151")
-    icon  = "✓" if i < step else str(i)
-    step_html += f'<span style="display:inline-flex;align-items:center;gap:6px"><span style="width:24px;height:24px;border-radius:50%;background:{n_cls};color:{"white" if i<=step else "#94a3b8"};font-size:.7rem;font-weight:700;display:inline-flex;align-items:center;justify-content:center">{icon}</span><span style="font-size:.76rem;font-weight:{"600" if i==step else "400"};color:{t_cls}">{s}</span></span>'
-    if i < 4: step_html += '<span style="color:#94a3b8;margin:0 8px;font-size:.7rem">──→</span>'
+/* 🔥 HUMAN-LIKE WAVE */
+@keyframes waveReal {
 
-st.markdown(f'<div style="background:white;border:1.5px solid #e2e8f0;border-radius:50px;padding:6px 20px;display:inline-flex;align-items:center;margin-bottom:22px">{step_html}</div>', unsafe_allow_html=True)
+  /* normal */
+  0%   { transform: rotate(0deg) scale(1); filter: drop-shadow(0 0 0px #8b5cf6); }
+
+  /* 🔥 wave + glow */
+  10%  { transform: rotate(20deg) scale(1.2); filter: drop-shadow(0 0 6px #8b5cf6); }
+  20%  { transform: rotate(-12deg) scale(1.15); filter: drop-shadow(0 0 8px #8b5cf6); }
+  30%  { transform: rotate(20deg) scale(1.2); filter: drop-shadow(0 0 10px #8b5cf6); }
+  40%  { transform: rotate(-6deg) scale(1.1); filter: drop-shadow(0 0 6px #8b5cf6); }
+
+  /* back to normal */
+  50%  { transform: rotate(0deg) scale(1); filter: drop-shadow(0 0 0px #8b5cf6); }
+
+  /* pause */
+  100% { transform: rotate(0deg) scale(1); filter: drop-shadow(0 0 0px #8b5cf6); }
+}
+</style>
+""", unsafe_allow_html=True)
+st.markdown(f"""
+<div style="font-family:var(--font-display);font-size:1.8rem;font-weight:700;color:#e2e8f0;">
+Welcome, {name_d}! <span class="wave">👋</span>
+</div>
+""", unsafe_allow_html=True)
+
+
+
 
 # ════════════════════════════════════════════════════════════
 #  PROFILE FORM
@@ -304,7 +160,7 @@ st.markdown(f'<div style="background:white;border:1.5px solid #e2e8f0;border-rad
 kb = load_kb()
 
 with st.container():
-    st.markdown('<div class="card">', unsafe_allow_html=True)
+
     st.markdown('<div class="card-title">📋 Complete Your Profile</div>', unsafe_allow_html=True)
     st.markdown('<div class="card-sub">Fill in your details — all fields are used by the AI to generate your perfect roadmap</div>', unsafe_allow_html=True)
 
@@ -314,8 +170,8 @@ with st.container():
     with c3:
         ag = "🧑 Young (15–30)" if age < 30 else ("👨 Adult (30–60)" if age < 60 else "👴 Senior (60+)")
         st.markdown(f"""
-        <label style="display:block;margin-bottom:8px;color:#475569;font-size:.78rem;font-weight:600">Age Group</label>
-        <div style="background:white;border:1.5px solid #e2e8f0;border-radius:10px;padding:10px 13px;color:#1e293b;font-size:.88rem;font-weight:500">{ag}</div>""", unsafe_allow_html=True)
+        <label style="display:block;margin-bottom:8px;color:rgba(255,255,255,0.5);font-size:.78rem;font-weight:600">Age Group</label>
+        <div style="background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.08);border-radius:10px;padding:10px 13px;color:#e2e8f0;font-size:.88rem;font-weight:500;margin-top:-8px;">{ag}</div>""", unsafe_allow_html=True)
     with c4:
         dom_list = ["Education","Entrepreneurship","Health","Hobbies"]
         domain   = st.selectbox("Domain", dom_list, index=dom_list.index(st.session_state.domain))
@@ -325,7 +181,7 @@ with st.container():
     with c6: skill  = st.selectbox("Current Skill Level", ["Beginner","Intermediate","Advanced"])
     with c7: hrs    = st.slider("Hours/Day", 0.5, 8.0, float(st.session_state.hrs), 0.5)
     with c8: health = st.text_input("Health Condition (optional)", placeholder="e.g. knee pain, diabetes")
-    st.markdown('</div>', unsafe_allow_html=True)
+
 
 # Goal-domain mismatch check
 if goal.strip():
@@ -354,15 +210,66 @@ if gen:
     else:
         with st.spinner("🔄 Building your personalised AI roadmap..."):
             result = generate_roadmap(name or "Learner", age, domain, goal, skill, hrs, health, kb)
+
+        # ✅ 🔥 ADD W&B LOGGING HERE ONLY
+
+        def _meaningful_words(text):
+            return {w for w in re.findall(r"[a-zA-Z]+", (text or "").lower()) if len(w) >= 3}
+
+        roadmap_items = result.get("roadmap", [])
+        roadmap_len = len(roadmap_items)
+
+        goal_words = _meaningful_words(goal)
+        overlap_scores = []
+        for item in roadmap_items:
+            topic_words = _meaningful_words(item.get("topic", ""))
+            if not goal_words:
+                overlap_scores.append(0.0)
+                continue
+            overlap_scores.append(len(goal_words & topic_words) / len(goal_words))
+
+        relevance = (sum(overlap_scores) / roadmap_len) if roadmap_len > 0 else 0.0
+
+        goal_match = 1 if domain == result.get("domain", "") else 0
+        if st.session_state.get("user_uid"):
+            try:
+                current_user = get_user_by_uid(st.session_state["user_uid"]) or {}
+            except Exception:
+                current_user = {}
+        else:
+            current_user = get_user(name or "Learner", age) or {}
+
+        done_topics = current_user.get("completed", []) if isinstance(current_user, dict) else []
+        completion_rate = (
+            len([t for t in roadmap_items if t.get("topic") in done_topics]) / roadmap_len
+            if roadmap_len > 0 else 0.0
+        )
+
+        import wandb
+        wandb.log({
+            "goal_match": goal_match,
+            "relevance_score": relevance,
+            "completion_rate": completion_rate,
+            "num_topics": len(result["roadmap"])
+        })
+
+        # ✅ existing logic
         st.session_state.update({
             "generated": True, "result": result,
             "name": name or "Learner", "goal": goal, "domain": domain,
             "age": age, "skill": skill, "hrs": hrs, "health": health
         })
+
         upsert_user(name or "Learner", age, domain, goal, skill, hrs, health, result["roadmap"])
+
+        uid = st.session_state.get("user_uid")
+        if uid:
+            save_roadmap(uid, name or "Learner", age, domain, goal, skill, hrs, health, result)
+            st.session_state["all_roadmaps"] = get_all_user_roadmaps(uid)
+
         st.rerun()
 
-st.markdown('<div class="fdiv"></div>', unsafe_allow_html=True)
+
 
 # ════════════════════════════════════════════════════════════
 #  RESULTS
@@ -370,17 +277,20 @@ st.markdown('<div class="fdiv"></div>', unsafe_allow_html=True)
 if not st.session_state.generated:
     # Landing overview
     total_kb  = sum(len(t) for d in kb.values() for t in d.values())
-    all_users = get_all_users_summary()
+    try:
+        all_users = get_all_users_firestore()
+    except Exception:
+        all_users = get_all_users_summary()
     st.markdown(f"""
     <div class="stat-grid">
-      <div class="stat-card"><div class="stat-icon" style="background:#ede9fe">📚</div>
+      <div class="stat-card"><div class="stat-icon" style="background:rgba(139,92,246,0.15)">📚</div>
         <div class="stat-num">{total_kb}</div><div class="stat-lbl">Topics in Knowledge Base</div></div>
-      <div class="stat-card"><div class="stat-icon" style="background:#d1fae5">👥</div>
+      <div class="stat-card"><div class="stat-icon" style="background:rgba(34,197,94,0.15)">👥</div>
         <div class="stat-num">{len(all_users)}</div><div class="stat-lbl">Registered Learners</div></div>
-      <div class="stat-card"><div class="stat-icon" style="background:#fef3c7">🌐</div>
+      <div class="stat-card"><div class="stat-icon" style="background:rgba(245,158,11,0.15)">🌐</div>
         <div class="stat-num">4</div><div class="stat-lbl">Domains</div></div>
-      <div class="stat-card"><div class="stat-icon" style="background:#fce7f3">🤖</div>
-        <div class="stat-num">5</div><div class="stat-lbl">AI Modules</div></div>
+      <div class="stat-card"><div class="stat-icon" style="background:rgba(236,72,153,0.15)">🤖</div>
+        <div class="stat-num">5</div><div class="stat-lbl">AI ML Modules</div></div>
     </div>""", unsafe_allow_html=True)
 
     icons = {"Education":"🎓","Entrepreneurship":"💼","Health":"💪","Hobbies":"🎨"}
@@ -390,11 +300,11 @@ if not st.session_state.generated:
         tot = sum(len(t) for t in levels.values())
         b, m, a = len(levels.get("Beginner",[])), len(levels.get("Intermediate",[])), len(levels.get("Advanced",[]))
         col.markdown(f"""
-        <div class="card" style="border-top:3px solid {clrs[d]};text-align:center;padding:18px">
+        <div class="card" style="border-top:2px solid {clrs[d]};text-align:center;padding:18px">
           <div style="font-size:1.6rem;margin-bottom:6px">{icons[d]}</div>
-          <div style="font-family:'Plus Jakarta Sans';font-weight:700;font-size:.9rem;color:#0f172a">{d}</div>
-          <div style="font-family:'Plus Jakarta Sans';font-size:1.7rem;font-weight:800;color:{clrs[d]};margin:4px 0">{tot}</div>
-          <div style="font-size:.68rem;color:#94a3b8;margin-bottom:8px">topics</div>
+          <div style="font-family:'Instrument Sans';font-weight:700;font-size:.9rem;color:#e2e8f0">{d}</div>
+          <div style="font-family:'Instrument Sans';font-size:1.7rem;font-weight:800;color:{clrs[d]};margin:4px 0">{tot}</div>
+          <div style="font-size:.68rem;color:rgba(255,255,255,0.35);margin-bottom:8px">topics</div>
           <div style="display:flex;gap:5px;justify-content:center;flex-wrap:wrap">
             <span class="lbeg">B:{b}</span><span class="lint">I:{m}</span><span class="ladv">A:{a}</span>
           </div>
@@ -403,25 +313,72 @@ if not st.session_state.generated:
 
 # ── SHOW ROADMAP ─────────────────────────────────────────────
 res     = st.session_state.result
-roadmap = res["roadmap"]
-cinfo   = res["cinfo"]
-user    = get_user(st.session_state.name, st.session_state.age)
+if not isinstance(res, dict):
+    st.session_state["generated"] = False
+    st.session_state["result"] = None
+    st.info("Generate a roadmap from the Dashboard to continue.")
+    st.stop()
+
+roadmap = res.get("roadmap", [])
+if not roadmap:
+    st.session_state["generated"] = False
+    st.session_state["result"] = None
+    st.info("No active roadmap is available right now. Generate a new roadmap to continue.")
+    st.stop()
+
+cinfo   = res.get("cinfo", {})
+
+# Add safe defaults for all cinfo keys
+if not isinstance(cinfo, dict):
+    cinfo = {}
+cinfo_safe = {
+    'color': cinfo.get('color', '#6366f1'),
+    'icon': cinfo.get('icon', '📚'),
+    'name': cinfo.get('name', 'Learning Cluster'),
+    'desc': cinfo.get('desc', 'Your personalized learning path'),
+    'bg': cinfo.get('bg', None)
+}
+
+# Add safe defaults for res keys
+res_safe = {
+    'total_t': res.get('total_t', len(roadmap)),
+    'total_w': res.get('total_w', 4),
+    'total_h': res.get('total_h', 0),
+    'domain': res.get('domain', 'Education'),
+    'related': res.get('related', [])
+}
+
+# Try Firebase first, fallback to local
+uid = st.session_state.get("user_uid")
+if uid:
+    try:
+        user = get_user_by_uid(uid)
+    except Exception:
+        user = {}
+else:
+    user = get_user(st.session_state.name, st.session_state.age)
 done    = user.get("completed", [])
 pct     = round(len([t for t in roadmap if t["topic"] in done]) / max(len(roadmap), 1) * 100)
 
+# Construct background color from cluster color
+cluster_color = cinfo_safe['color']
+bg_color = cinfo_safe['bg'] if cinfo_safe['bg'] else f'{cluster_color}12'
+if isinstance(bg_color, str) and bg_color.startswith('#'):
+    bg_color = bg_color + '12'
+
 # Cluster banner
 st.markdown(f"""
-<div class="cl-ban" style="background:{cinfo['bg']};border-color:{cinfo['color']}44">
-  <div style="font-size:1.8rem">{cinfo['icon']}</div>
+<div class="cl-ban" style="background:{bg_color};border-color:{cinfo_safe['color']}33">
+  <div style="font-size:1.8rem">{cinfo_safe['icon']}</div>
   <div>
-    <div style="font-family:'Plus Jakarta Sans';font-size:.95rem;font-weight:700;color:{cinfo['color']}">
-      Cluster: {cinfo['name']}</div>
-    <div style="font-size:.78rem;color:#64748b">{cinfo['desc']}</div>
+    <div style="font-family:'Instrument Sans';font-size:.95rem;font-weight:700;color:{cinfo_safe['color']}">
+      Cluster: {cinfo_safe['name']}</div>
+    <div style="font-size:.78rem;color:rgba(255,255,255,0.4)">{cinfo_safe['desc']}</div>
   </div>
   <div style="margin-left:auto;text-align:right">
-    <div style="font-size:.68rem;color:#94a3b8;margin-bottom:2px">Progress</div>
-    <div style="font-family:'Plus Jakarta Sans';font-size:1.5rem;font-weight:800;color:{cinfo['color']}">{pct}%</div>
-    <div class="pb" style="width:110px"><div class="pbf" style="width:{pct}%;background:{cinfo['color']}"></div></div>
+    <div style="font-size:.68rem;color:rgba(255,255,255,0.35);margin-bottom:2px">Progress</div>
+    <div style="font-family:'Instrument Sans';font-size:1.5rem;font-weight:800;color:{cinfo_safe['color']}">{pct}%</div>
+    <div class="pb" style="width:110px"><div class="pbf" style="width:{pct}%;background:{cinfo_safe['color']}"></div></div>
   </div>
 </div>""", unsafe_allow_html=True)
 
@@ -429,13 +386,13 @@ st.markdown(f"""
 done_count = len([t for t in roadmap if t["topic"] in done])
 st.markdown(f"""
 <div class="stat-grid">
-  <div class="stat-card"><div class="stat-icon" style="background:#ede9fe">📋</div>
-    <div class="stat-num">{res['total_t']}</div><div class="stat-lbl">Total Topics</div></div>
-  <div class="stat-card"><div class="stat-icon" style="background:#d1fae5">📅</div>
-    <div class="stat-num">{res['total_w']}</div><div class="stat-lbl">Weeks</div></div>
-  <div class="stat-card"><div class="stat-icon" style="background:#fef3c7">⏱</div>
-    <div class="stat-num">{res['total_h']}h</div><div class="stat-lbl">Total Hours</div></div>
-  <div class="stat-card"><div class="stat-icon" style="background:#fce7f3">✅</div>
+  <div class="stat-card"><div class="stat-icon" style="background:rgba(139,92,246,0.15)">📋</div>
+    <div class="stat-num">{res_safe['total_t']}</div><div class="stat-lbl">Total Topics</div></div>
+  <div class="stat-card"><div class="stat-icon" style="background:rgba(34,197,94,0.15)">📅</div>
+    <div class="stat-num">{res_safe['total_w']}</div><div class="stat-lbl">Weeks</div></div>
+  <div class="stat-card"><div class="stat-icon" style="background:rgba(245,158,11,0.15)">⏱</div>
+    <div class="stat-num">{res_safe['total_h']}h</div><div class="stat-lbl">Total Hours</div></div>
+  <div class="stat-card"><div class="stat-icon" style="background:rgba(236,72,153,0.15)">✅</div>
     <div class="stat-num">{done_count}</div><div class="stat-lbl">Completed</div></div>
 </div>""", unsafe_allow_html=True)
 
@@ -449,7 +406,7 @@ with left:
     tab1, tab2, tab3 = st.tabs(["📋 Step-by-Step Plan", "🌐 Node Graph", "🔗 Learning Resources"])
 
     with tab1:
-        st.markdown('<div class="card">', unsafe_allow_html=True)
+
         st.markdown(f'<div class="card-title">Week-by-Week Plan — {len(roadmap)} Topics</div>', unsafe_allow_html=True)
         st.markdown('<div class="card-sub">✅ Tick topics as you complete them — saved automatically</div>', unsafe_allow_html=True)
         cw = 0
@@ -465,6 +422,12 @@ with left:
                                   key=f"d_chk_{step_item['step']}",
                                   label_visibility="collapsed")
                 if chk != is_done:
+                  if st.session_state.get("user_uid"):
+                    try:
+                      toggle_topic_firestore(st.session_state["user_uid"], step_item["topic"])
+                    except Exception:
+                      st.warning("Could not save progress to cloud. Please try again.")
+                  else:
                     toggle_topic(st.session_state.name, st.session_state.age, step_item["topic"])
                     st.rerun()
             with col2:
@@ -477,7 +440,7 @@ with left:
                   <div class="tcat">{step_item.get('category','')}</div>
                   <div class="tdur">{step_item['duration']}h</div>
                 </div>""", unsafe_allow_html=True)
-        st.markdown('</div>', unsafe_allow_html=True)
+
 
         d1, d2 = st.columns(2)
         df = pd.DataFrame([{"Step":s["step"],"Week":s["week"],"Topic":s["topic"],
@@ -496,7 +459,7 @@ with left:
                                use_container_width=True)
 
     with tab2:
-        st.markdown('<div class="card">', unsafe_allow_html=True)
+
         st.markdown('<div class="card-title">🌐 Node Graph — Knowledge Tree</div>', unsafe_allow_html=True)
         st.caption("Root → Weeks → Topics. Green = completed, default = pending.")
 
@@ -504,6 +467,9 @@ with left:
         weeks_map = ddict(list)
         for t in roadmap: weeks_map[t["week"]].append(t)
         swks = sorted(weeks_map.keys())
+        if not swks:
+            st.info("No roadmap nodes to display yet.")
+            st.stop()
 
         NW,NH,HG,VG,MR = 170,40,28,65,4
         PX = 50
@@ -520,10 +486,10 @@ with left:
         for wk in swks:
             tops = weeks_map[wk]
             wx, wy = SW//2, cy
-            nodes.append(f'<rect x="{wx-52}" y="{wy-13}" width="104" height="26" rx="13" fill="#ede9fe" stroke="#c4b5fd" stroke-width="1.5"/>')
-            nodes.append(f'<text x="{wx}" y="{wy+4}" text-anchor="middle" font-family="Inter" font-size="11" font-weight="700" fill="#6d28d9">Week {wk}</text>')
+            nodes.append(f'<rect x="{wx-52}" y="{wy-13}" width="104" height="26" rx="13" fill="rgba(99,102,241,0.15)" stroke="rgba(99,102,241,0.3)" stroke-width="1.5"/>')
+            nodes.append(f'<text x="{wx}" y="{wy+4}" text-anchor="middle" font-family="Inter" font-size="11" font-weight="700" fill="#a5b4fc">Week {wk}</text>')
             for px, py in prev:
-                nodes.append(f'<line x1="{px}" y1="{py}" x2="{wx}" y2="{wy-13}" stroke="#c4b5fd" stroke-width="1.5" stroke-dasharray="4,3"/>')
+                nodes.append(f'<line x1="{px}" y1="{py}" x2="{wx}" y2="{wy-13}" stroke="rgba(99,102,241,0.3)" stroke-width="1.5" stroke-dasharray="4,3"/>')
             cy = wy + 26 + 26
             rows = [tops[i:i+MR] for i in range(0,len(tops),MR)]
             wb = []
@@ -534,15 +500,15 @@ with left:
                     nx_ = sx+ci*(NW+HG); ny_ = ry
                     cx_ = nx_+NW//2; cy2 = ny_+NH//2
                     id_ = t["topic"] in done
-                    col = "#94a3b8" if id_ else lcols.get(t.get("level","Beginner"),"#6366f1")
-                    fill= "#f0fdf4" if id_ else "white"
-                    nodes.append(f'<line x1="{wx}" y1="{wy+13}" x2="{cx_}" y2="{ny_}" stroke="#ddd6fe" stroke-width="1.5"/>')
+                    col = "#64748b" if id_ else lcols.get(t.get("level","Beginner"),"#6366f1")
+                    fill= "rgba(34,197,94,0.12)" if id_ else "rgba(255,255,255,0.04)"
+                    nodes.append(f'<line x1="{wx}" y1="{wy+13}" x2="{cx_}" y2="{ny_}" stroke="rgba(255,255,255,0.08)" stroke-width="1.5"/>')
                     tick = "✓ " if id_ else ""
                     nm   = t["topic"][:20]+("…" if len(t["topic"])>20 else "")
                     nodes.append(f'<rect x="{nx_}" y="{ny_}" width="{NW}" height="{NH}" rx="8" fill="{fill}" stroke="{col}" stroke-width="1.8" filter="url(#sh)"/>')
                     nodes.append(f'<circle cx="{nx_+12}" cy="{ny_+NH//2}" r="4" fill="{col}"/>')
-                    nodes.append(f'<text x="{nx_+22}" y="{ny_+14}" font-family="Inter" font-size="10" font-weight="600" fill="{"#94a3b8" if id_ else "#1e293b"}">{tick}{nm}</text>')
-                    nodes.append(f'<text x="{nx_+22}" y="{ny_+27}" font-family="Inter" font-size="9" fill="#94a3b8">{t["duration"]}h · {t.get("category","")[:13]}</text>')
+                    nodes.append(f'<text x="{nx_+22}" y="{ny_+14}" font-family="Inter" font-size="10" font-weight="600" fill="{"#64748b" if id_ else "#e2e8f0"}">{tick}{nm}</text>')
+                    nodes.append(f'<text x="{nx_+22}" y="{ny_+27}" font-family="Inter" font-size="9" fill="rgba(255,255,255,0.35)">{t["duration"]}h · {t.get("category","")[:13]}</text>')
                     wb.append((cx_, ny_+NH))
                 cy = ry+NH+18
             prev = wb[:MR]; cy += VG-18
@@ -550,34 +516,34 @@ with left:
         SH = cy+PX
         svg = f"""<svg width="100%" viewBox="0 0 {SW} {SH}" xmlns="http://www.w3.org/2000/svg">
           <defs><filter id="sh" x="-10%" y="-10%" width="130%" height="140%">
-            <feDropShadow dx="0" dy="2" stdDeviation="2.5" flood-opacity="0.07"/></filter></defs>
-          <rect width="{SW}" height="{SH}" fill="#f8fafc" rx="12"/>
+            <feDropShadow dx="0" dy="2" stdDeviation="2.5" flood-opacity="0.2"/></filter></defs>
+          <rect width="{SW}" height="{SH}" fill="#0d1117" rx="12"/>
           {''.join(nodes)}</svg>"""
-        st.markdown(f'<div style="overflow:auto;background:#f8fafc;border:1.5px solid #e2e8f0;border-radius:14px;padding:12px">{svg}</div>', unsafe_allow_html=True)
-        st.markdown('</div>', unsafe_allow_html=True)
+        st.markdown(f'<div style="overflow:auto;background:#0d1117;border:1px solid rgba(255,255,255,0.08);border-radius:14px;padding:12px">{svg}</div>', unsafe_allow_html=True)
+
 
     with tab3:
         from core.engine import get_resources
-        st.markdown('<div class="card">', unsafe_allow_html=True)
+
         st.markdown('<div class="card-title">🔗 AI Learning Resources</div>', unsafe_allow_html=True)
         st.markdown('<div class="card-sub">Click Open to launch YouTube, Coursera, Khan Academy and more directly</div>', unsafe_allow_html=True)
         for s in roadmap[:10]:
             with st.expander(f"{'✅' if s['topic'] in done else '📖'} {s['topic']} ({s['duration']}h)"):
-                for r in get_resources(s["topic"], res["domain"], s.get("level","Beginner")):
+                for r in get_resources(s["topic"], res_safe["domain"], s.get("level","Beginner")):
                     st.markdown(f"""
                     <div class="res">
                       <span style="font-size:1.2rem">{r['icon']}</span>
                       <div>
-                        <div style="font-size:.83rem;font-weight:600;color:#1e293b">{r['title']}</div>
-                        <div style="font-size:.71rem;color:#64748b">{r['desc']} · {r['platform']}</div>
+                        <div style="font-size:.83rem;font-weight:600;color:#e2e8f0">{r['title']}</div>
+                        <div style="font-size:.71rem;color:rgba(255,255,255,0.4)">{r['desc']} · {r['platform']}</div>
                       </div>
                       <a href="{r['url']}" target="_blank" class="res-btn">Open →</a>
                     </div>""", unsafe_allow_html=True)
-        st.markdown('</div>', unsafe_allow_html=True)
+
 
 with right:
     # Skill mastery
-    st.markdown('<div class="card">', unsafe_allow_html=True)
+
     st.markdown('<div class="card-title">📊 Skill Mastery</div>', unsafe_allow_html=True)
     cat_h = defaultdict(float); cat_done = defaultdict(float)
     for t in roadmap:
@@ -592,19 +558,20 @@ with right:
         <div class="skrow">
           <div class="sktop">
             <span class="skname">
-              <span style="width:8px;height:8px;border-radius:50%;background:{c};display:inline-block"></span>
+              <span style="width:8px;height:8px;border-radius:50%;background:{c};display:inline-block;box-shadow:0 0 6px {c}44"></span>
               {cat[:18]}
             </span>
             <span class="skpct" style="color:{c}">{dp}%</span>
           </div>
           <div class="pb"><div class="pbf" style="width:{dp}%;background:{c}"></div></div>
         </div>""", unsafe_allow_html=True)
-    st.markdown('</div>', unsafe_allow_html=True)
+
 
     # Weekly schedule
-    st.markdown('<div class="card">', unsafe_allow_html=True)
+
     st.markdown('<div class="card-title">📆 Weekly Schedule</div>', unsafe_allow_html=True)
     days = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"]
+    hrs = st.session_state.get("hrs", 1.5)
     sh = '<div class="sched">'
     for i, d in enumerate(days):
         if i < 5:   sh += f'<div><div class="sdlbl">{d}</div><div class="sdslot a">{hrs}h</div></div>'
@@ -612,11 +579,11 @@ with right:
         else:       sh += f'<div><div class="sdlbl">{d}</div><div class="sdslot x">Rest</div></div>'
     sh += '</div>'
     st.markdown(sh, unsafe_allow_html=True)
-    st.markdown('</div>', unsafe_allow_html=True)
+
 
     # Roadmap preview
-    st.markdown('<div class="card">', unsafe_allow_html=True)
-    st.markdown(f'<div class="card-title">🗺️ Your Roadmap</div>', unsafe_allow_html=True)
+
+    st.markdown(f'<div class="card-title">🗺️ Your Learning Roadmap</div>', unsafe_allow_html=True)
     st.markdown(f'<div class="card-sub">Goal: {st.session_state.goal}</div>', unsafe_allow_html=True)
     nc = ["#6366f1","#8b5cf6","#a78bfa","#c4b5fd","#ddd6fe","#ede9fe"]
     for i, s in enumerate(roadmap[:6]):
@@ -624,7 +591,7 @@ with right:
         col  = "#10b981" if dn else nc[min(i,len(nc)-1)]
         lbl  = ("✓ " if dn else "") + s["topic"][:24]
         bdg  = "Done" if dn else ("In Progress" if i==done_count else "Upcoming")
-        bc   = "#10b981" if dn else ("#6366f1" if i==done_count else "#94a3b8")
+        bc   = "#10b981" if dn else ("#6366f1" if i==done_count else "rgba(255,255,255,0.3)")
         st.markdown(f"""
         <div class="rpnode">
           <div class="rpdot" style="background:{col}">{'✓' if dn else i+1}</div>
@@ -634,32 +601,31 @@ with right:
         {'<div class="rpline"></div>' if i < 5 else ''}""", unsafe_allow_html=True)
     if len(roadmap) > 6:
         st.caption(f"+ {len(roadmap)-6} more topics → visit Skill Roadmap page")
-    st.markdown('</div>', unsafe_allow_html=True)
+
 
     # AI Recommendations
-    st.markdown('<div class="card">', unsafe_allow_html=True)
+
     st.markdown('<div class="card-title">💡 AI Recommendations</div>', unsafe_allow_html=True)
+    hrs = st.session_state.get("hrs", 1.5)
     next_t = roadmap[done_count]["topic"][:28] if done_count < len(roadmap) else "All done!"
     recs = [
-        f"📅 Study {hrs}h/day → finish in {res['total_w']} weeks",
+        f"📅 Study {hrs}h/day → finish in {res_safe['total_w']} weeks",
         f"🎯 Next up: {next_t}",
         f"📈 {pct}% complete — keep going!",
-        f"💪 {res['total_t'] - done_count} topics remaining",
+        f"💪 {res_safe['total_t'] - done_count} topics remaining",
     ]
     for r in recs:
-        st.markdown(f'<div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:8px 12px;margin:5px 0;font-size:.81rem;color:#374151">{r}</div>', unsafe_allow_html=True)
-    st.markdown('</div>', unsafe_allow_html=True)
+        st.markdown(f'<div style="background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.06);border-radius:8px;padding:8px 12px;margin:5px 0;font-size:.81rem;color:rgba(255,255,255,0.6)">{r}</div>', unsafe_allow_html=True)
+
 
     # Related
-    if res.get("related"):
-        st.markdown('<div class="card">', unsafe_allow_html=True)
-        st.markdown('<div class="card-title">🔗 You Might Also Enjoy</div>', unsafe_allow_html=True)
-        for r in res["related"]:
-            st.markdown(f"""
-            <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;padding:9px 12px;margin:6px 0">
-              <div style="font-size:.65rem;color:#6366f1;font-weight:700;text-transform:uppercase">{r['domain']} · {r['level']}</div>
-              <div style="font-size:.84rem;font-weight:600;color:#1e293b;margin:2px 0">{r['topic']}</div>
-              <div style="font-size:.71rem;color:#64748b">📁 {r['category']} · ⏱ {r['duration']}h</div>
-            </div>""", unsafe_allow_html=True)
-        st.markdown('</div>', unsafe_allow_html=True)
+    if res_safe.get("related"):
 
+        st.markdown('<div class="card-title">🔗 You Might Also Enjoy</div>', unsafe_allow_html=True)
+        for r in res_safe["related"]:
+            st.markdown(f"""
+            <div style="background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.06);border-radius:10px;padding:9px 12px;margin:6px 0">
+              <div style="font-size:.65rem;color:#a5b4fc;font-weight:700;text-transform:uppercase">{r['domain']} · {r['level']}</div>
+              <div style="font-size:.84rem;font-weight:600;color:#e2e8f0;margin:2px 0">{r['topic']}</div>
+              <div style="font-size:.71rem;color:rgba(255,255,255,0.4)">📁 {r['category']} · ⏱ {r['duration']}h</div>
+            </div>""", unsafe_allow_html=True)
