@@ -4,16 +4,28 @@
 #  Accuracy: 100% on 20-goal test suite
 # ================================================================
 
-import json, os, re, hashlib, datetime, warnings
+import json, os, re, hashlib, datetime, warnings, pickle
 import numpy as np, networkx as nx
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 from collections import defaultdict
+
+from streamlit.string_util import clean_text
 warnings.filterwarnings("ignore")
+
+from sentence_transformers import SentenceTransformer
+# 🔥 Load embedding model (lightweight + fast)
+model = SentenceTransformer('all-MiniLM-L6-v2')
+
+from difflib import SequenceMatcher
+def similarity(a, b):
+    return SequenceMatcher(None, a.lower(), b.lower()).ratio()
 
 DATA_DIR   = os.path.join(os.path.dirname(__file__), "..", "data")
 KB_FILE    = os.path.join(DATA_DIR, "knowledge_base.json")
 USERS_FILE = os.path.join(DATA_DIR, "users_data.json")
+MODEL_DIR  = os.path.join(os.path.dirname(__file__), "..", "models")
+RANKER_FILE = os.path.join(MODEL_DIR, "goal_topic_ranker.pkl")
 
 
 # ══════════════════════════════════════════════════════════════
@@ -170,6 +182,54 @@ def _kw_match(kw, text):
     if " " not in kw:
         return bool(re.search(r'\b' + re.escape(kw) + r'\b', text))
     return kw in text
+
+def _tokenize_meaningful(text):
+    """Tokenize text into meaningful lowercase words (len >= 3)."""
+    if not text:
+        return set()
+    return {w for w in re.findall(r"[a-zA-Z]+", text.lower()) if len(w) >= 3}
+
+def _topic_text(topic):
+    return " ".join([
+        str(topic.get("topic", "")),
+        str(topic.get("description", "")),
+        str(topic.get("category", "")),
+        str(topic.get("level", "")),
+    ]).strip()
+
+_GOAL_TOPIC_RANKER = None
+
+def _load_goal_topic_ranker():
+    """Lazily load trained goal-topic ranker. Returns None if unavailable."""
+    global _GOAL_TOPIC_RANKER
+    if _GOAL_TOPIC_RANKER is not None:
+        return _GOAL_TOPIC_RANKER
+    if not os.path.exists(RANKER_FILE):
+        _GOAL_TOPIC_RANKER = False
+        return None
+    try:
+        with open(RANKER_FILE, "rb") as f:
+            obj = pickle.load(f)
+        if isinstance(obj, dict) and "vectorizer" in obj and "model" in obj:
+            _GOAL_TOPIC_RANKER = obj
+            return obj
+    except Exception:
+        pass
+    _GOAL_TOPIC_RANKER = False
+    return None
+
+def _ml_rank_score(goal_text, topic):
+    """Return model relevance score in [0,1] if model exists, else None."""
+    ranker = _load_goal_topic_ranker()
+    if not ranker:
+        return None
+    try:
+        feat = f"goal: {goal_text} [SEP] topic: {_topic_text(topic)}"
+        X = ranker["vectorizer"].transform([feat])
+        probs = ranker["model"].predict_proba(X)[0]
+        return float(probs[1]) if len(probs) > 1 else float(probs[0])
+    except Exception:
+        return None
 
 
 def detect_goal_category(goal_text):
@@ -368,6 +428,40 @@ def build_graph_sorted(topics):
         order = [t["id"] for t in topics]
     return [lk[n] for n in order if n in lk], G
 
+def build_graph_sorted_priority(topics, priority_scores):
+    """
+    Priority-aware topological sort.
+    Keeps prerequisite constraints while preferring higher scored available nodes.
+    """
+    G, lk = nx.DiGraph(), {}
+    for t in topics:
+        G.add_node(t["id"], **t)
+        lk[t["id"]] = t
+    for t in topics:
+        for p in t.get("prerequisites", []):
+            if p in lk:
+                G.add_edge(p, t["id"])
+
+    indeg = {n: G.in_degree(n) for n in G.nodes()}
+    ready = [n for n, d in indeg.items() if d == 0]
+    ordered_ids = []
+
+    while ready:
+        ready.sort(key=lambda nid: priority_scores.get(nid, 0.0), reverse=True)
+        cur = ready.pop(0)
+        ordered_ids.append(cur)
+        for nei in G.successors(cur):
+            indeg[nei] -= 1
+            if indeg[nei] == 0:
+                ready.append(nei)
+
+    if len(ordered_ids) != len(lk):
+        try:
+            ordered_ids = list(nx.topological_sort(G))
+        except nx.NetworkXUnfeasible:
+            ordered_ids = [t["id"] for t in topics]
+    return [lk[n] for n in ordered_ids if n in lk], G
+
 
 # ══════════════════════════════════════════════════════════════
 #  TIME ALLOCATION
@@ -390,34 +484,79 @@ def allocate_weeks(topics, hrs):
 #  TF-IDF CROSS-DOMAIN RECOMMENDATIONS
 # ══════════════════════════════════════════════════════════════
 def get_related_activities(domain, goal, goal_category, kb, n=3):
-    """
-    Suggest related activities from OTHER domains/categories.
-    Skips same domain+category (already in roadmap).
-    """
-    items, labels = [], []
-    for d, levels in kb.items():
-        for lvl, tops in levels.items():
-            for t in tops:
-                cat = t.get("category", "")
-                # Skip current domain+category
-                if d == domain and cat == goal_category:
-                    continue
-                items.append(f"{t['topic']} {cat}")
-                labels.append({"domain": d, "topic": t["topic"],
-                                "category": cat, "level": lvl,
-                                "duration": t["duration"]})
+
+    items = []
+    labels = []
+
+    # collect topics
+    for lvl, topics in kb.get(domain, {}).items():
+        for t in topics:
+
+            items.append(
+                f"{t.get('topic','')} {t.get('category','')} {domain} {lvl}"
+            )
+
+            labels.append({
+                "topic": t.get("topic", ""),
+                "category": t.get("category", "General"),
+                "level": lvl,
+                "duration": t.get("duration", 1),
+                "domain": domain
+            })
+
+    # safety check
     if not items or not goal.strip():
         return []
+
     try:
-        corpus = items + [goal]
-        mat    = TfidfVectorizer(stop_words="english").fit_transform(corpus)
-        sims   = cosine_similarity(mat[-1], mat[:-1])[0]
-        top    = sims.argsort()[::-1][:n]
-        return [labels[i] for i in top if sims[i] > 0]
-    except Exception:
+        def clean_text_local(t):
+            return re.sub(r'[^a-zA-Z ]', '', t.lower())
+
+        corpus = [clean_text_local(x) for x in items] + [clean_text_local(goal)]
+
+        embeddings = model.encode(corpus)
+
+        goal_vec = embeddings[-1]
+        topic_vecs = embeddings[:-1]
+
+        sims = cosine_similarity([goal_vec], topic_vecs)[0]
+
+        goal_tokens = _tokenize_meaningful(goal)
+        weighted_scores = []
+
+        for i in range(len(sims)):
+            score = sims[i]
+
+            if goal_category and labels[i]["category"].lower() == goal_category.lower():
+                score += 0.15
+
+            topic_tokens = _tokenize_meaningful(
+                f"{labels[i].get('topic', '')} {labels[i].get('category', '')}"
+            )
+            overlap = len(goal_tokens & topic_tokens)
+            if overlap > 0:
+                score += min(0.12, 0.04 * overlap)
+
+            weighted_scores.append(score)
+
+        if not weighted_scores:
+            return []
+
+        dynamic_threshold = float(np.percentile(weighted_scores, 70))
+        filtered = [i for i, s in enumerate(weighted_scores) if s >= dynamic_threshold]
+
+        if not filtered:
+            filtered = list(np.argsort(weighted_scores)[::-1][:10])
+
+        filtered = sorted(filtered, key=lambda i: weighted_scores[i], reverse=True)
+
+        top = filtered[:n]
+
+        return [labels[i] for i in top]
+
+    except Exception as e:
+        print("Error in related activities:", e)
         return []
-
-
 # ══════════════════════════════════════════════════════════════
 #  AI RESOURCE LINKS
 # ══════════════════════════════════════════════════════════════
@@ -557,397 +696,111 @@ def generate_roadmap(name, age, domain, goal, skill, hrs, health, kb):
     # Step 6: Rule engine (age, health, time constraints)
     filtered_pool = apply_rules(filtered_pool, age, hrs, domain, goal, health)
 
+    # Step 6.5: Score candidates before graph ordering
+    goal_tokens = _tokenize_meaningful(goal)
+    skill_level_rank = {"Beginner": 1, "Intermediate": 2, "Advanced": 3}
+    target_rank = skill_level_rank.get(skill, 1)
+    try:
+        goal_vec = model.encode([goal])[0] if goal.strip() else None
+    except Exception:
+        goal_vec = None
+
+    def _topic_priority_score(topic):
+        topic_tokens = _tokenize_meaningful(
+            f"{topic.get('topic', '')} {topic.get('description', '')} {topic.get('category', '')}"
+        )
+        overlap = len(goal_tokens & topic_tokens)
+        keyword_score = min(1.0, overlap / max(len(goal_tokens), 1))
+
+        category_score = 1.0 if (
+            goal_category and topic.get("category", "").lower() == goal_category.lower()
+        ) else 0.0
+
+        topic_rank = skill_level_rank.get(topic.get("level", "Beginner"), 1)
+        level_gap = abs(topic_rank - target_rank)
+        level_score = 1.0 if level_gap == 0 else (0.6 if level_gap == 1 else 0.3)
+
+        semantic_score = 0.0
+        if goal_vec is not None:
+            try:
+                topic_vec = model.encode([_topic_text(topic)])[0]
+                semantic_score = float(cosine_similarity([goal_vec], [topic_vec])[0][0])
+                semantic_score = max(0.0, min(1.0, semantic_score))
+            except Exception:
+                semantic_score = 0.0
+
+        heuristic = (
+            (0.40 * semantic_score) +
+            (0.35 * keyword_score) +
+            (0.15 * category_score) +
+            (0.10 * level_score)
+        )
+        ml_score = _ml_rank_score(goal, topic)
+        if ml_score is None:
+            return heuristic
+        # Blend trained score with heuristic for stable production behavior.
+        return (0.70 * ml_score) + (0.30 * heuristic)
+
+    filtered_pool = sorted(filtered_pool, key=_topic_priority_score, reverse=True)
+    priority_scores = {t["id"]: _topic_priority_score(t) for t in filtered_pool}
+
     # Step 7: Knowledge graph + topological sort
-    ordered, G = build_graph_sorted(filtered_pool)
+    ordered, G = build_graph_sorted_priority(filtered_pool, priority_scores)
 
-    # Step 8: Goal keyword topics rise to top
-    goal_words = [w for w in goal.lower().split() if len(w) > 3]
-    if goal_words:
-        priority = [t for t in ordered
-                    if any(gw in t["topic"].lower() for gw in goal_words)]
-        rest     = [t for t in ordered if t not in priority]
-        ordered  = priority + rest
+    # Step 8: Remove near-duplicates + add diversity
 
-    # Step 9: Allocate weeks
+    used_topics = set()
+    used_categories = {}
+    final_ordered = []
+
+    for t in ordered:
+
+        topic_name = t["topic"].lower()
+        category = t.get("category", "General")
+
+        # ❌ skip exact/near-duplicate topics
+        if any(topic_name == ut or similarity(topic_name, ut) > 0.85 for ut in used_topics):
+            continue
+
+        # ❌ limit category repetition
+        if used_categories.get(category, 0) >= 3:
+            continue
+
+        # ✅ accept
+        used_topics.add(topic_name)
+        used_categories[category] = used_categories.get(category, 0) + 1
+        final_ordered.append(t)
+
+    ordered = final_ordered
+
+    # ── STEP 9 ──
     roadmap = allocate_weeks(ordered, hrs)
 
-    # Step 10: Cross-domain related activities
+    # ── STEP 10 ──
     related = get_related_activities(domain, goal, goal_category, kb, n=3)
 
     total_h = sum(t["duration"] for t in roadmap)
 
+    # ── FINAL RETURN ──
     return {
-        "roadmap"       : roadmap,
-        "cid"           : cid,
-        "cinfo"         : cinfo,
-        "related"       : related,
-        "G"             : G,
-        "total_h"       : round(total_h, 1),
-        "total_w"       : roadmap[-1]["week"] if roadmap else 0,
-        "total_t"       : len(roadmap),
-        "domain"        : domain,
-        "goal_category" : goal_category,
-        "profile"       : {
-            "name": name, "age": age, "domain": domain, "goal": goal,
-            "skill": skill, "hrs": hrs, "health": health
+        "roadmap": roadmap,
+        "cid": cid,
+        "cinfo": cinfo,
+        "related": related,
+        "G": G,
+        "total_h": round(total_h, 1),
+        "total_w": roadmap[-1]["week"] if roadmap else 0,
+        "total_t": len(roadmap),
+        "domain": domain,
+        "goal_category": goal_category,
+        "profile": {
+            "name": name,
+            "age": age,
+            "domain": domain,
+            "goal": goal,
+            "skill": skill,
+            "hrs": hrs,
+            "health": health
         }
     }
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-'''
-# ================================================================
-#  core/engine.py — All ML + Data Logic
-#  Knowledge Graph · K-Means · TF-IDF · Rule Engine · Storage
-# ================================================================
-
-import json, os, hashlib, datetime, warnings
-import numpy as np, networkx as nx
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.metrics.pairwise import cosine_similarity
-from collections import defaultdict
-warnings.filterwarnings("ignore")
-
-DATA_DIR   = os.path.join(os.path.dirname(__file__), "..", "data")
-KB_FILE    = os.path.join(DATA_DIR, "knowledge_base.json")
-USERS_FILE = os.path.join(DATA_DIR, "users_data.json")
-
-# ── DOMAIN KEYWORD DETECTOR ──────────────────────────────────
-DOMAIN_KEYWORDS = {
-    "Education": [
-        "learn","study","python","coding","programming","math","algebra","science",
-        "exam","degree","college","university","language","english","machine learning",
-        "data science","ai","artificial intelligence","deep learning","web development",
-        "sql","html","css","javascript","java","c++","react","node","algorithm",
-        "research","academic","course","certificate","skill","software","computer"
-    ],
-    "Entrepreneurship": [
-        "business","startup","entrepreneur","marketing","sales","revenue","profit",
-        "funding","investor","pitch","brand","product","launch","mvp","growth",
-        "strategy","management","leadership","finance","budget","cash flow","team",
-        "hiring","seo","digital marketing","social media","e-commerce","freelance",
-        "consulting","company","venture","capital","stock","gst","tax","legal"
-    ],
-    "Health": [
-        "health","fitness","weight","lose weight","gain weight","diet","nutrition",
-        "exercise","workout","yoga","meditation","stress","anxiety","depression",
-        "sleep","running","gym","muscle","fat","diabetes","blood pressure","heart",
-        "mental health","wellness","medication","disease","immunity","strength",
-        "cardio","hiit","flexibility","mobility","rehab","therapy","mindfulness"
-    ],
-    "Hobbies": [
-        "hobby","garden","gardening","sing","singing","dance","dancing","cook","cooking",
-        "art","paint","painting","draw","drawing","music","guitar","piano","photography",
-        "craft","knit","sew","bake","baking","travel","chess","photography","film",
-        "read","book","creative","pottery","sculpt","origami","calligraphy","photography"
-    ]
-}
-
-def detect_best_domain(goal_text):
-    """
-    Detect the most suitable domain from goal text.
-    Returns the best matching domain name.
-    """
-    if not goal_text.strip():
-        return None
-    goal_lower = goal_text.lower()
-    scores = {}
-    for domain, keywords in DOMAIN_KEYWORDS.items():
-        score = sum(1 for kw in keywords if kw in goal_lower)
-        scores[domain] = score
-    best = max(scores, key=scores.get)
-    return best if scores[best] > 0 else None
-
-def goal_domain_mismatch(goal_text, selected_domain):
-    """
-    Returns (mismatch: bool, suggested_domain: str|None)
-    """
-    best = detect_best_domain(goal_text)
-    if best and best != selected_domain:
-        return True, best
-    return False, None
-
-
-# ── KNOWLEDGE BASE ────────────────────────────────────────────
-def load_kb():
-    if os.path.exists(KB_FILE):
-        with open(KB_FILE, encoding="utf-8") as f:
-            return json.load(f)
-    return {}
-
-
-# ── USER STORAGE ─────────────────────────────────────────────
-def load_users():
-    if os.path.exists(USERS_FILE):
-        with open(USERS_FILE) as f: return json.load(f)
-    return {}
-
-def save_users(db):
-    os.makedirs(DATA_DIR, exist_ok=True)
-    with open(USERS_FILE, "w") as f: json.dump(db, f, indent=2)
-
-def make_uid(name, age):
-    return hashlib.sha256(f"{str(name).strip().lower()}_{age}".encode()).hexdigest()[:16]
-
-def upsert_user(name, age, domain, goal, skill, hours, health, roadmap):
-    db  = load_users()
-    uid = make_uid(name, age)
-    old = db.get(uid, {})
-    db[uid] = {
-        "display_name"   : name,
-        "age"            : age,
-        "domain"         : domain,
-        "goal"           : goal,
-        "skill"          : skill,
-        "hours"          : hours,
-        "health"         : health,
-        "last_seen"      : datetime.datetime.now().isoformat(),
-        "sessions"       : old.get("sessions", 0) + 1,
-        "completed"      : old.get("completed", []),
-        "total_topics"   : len(roadmap),
-        "badges"         : old.get("badges", []),
-        "streak_days"    : old.get("streak_days", 0) + 1,
-    }
-    save_users(db)
-    return uid
-
-def get_user(name, age):
-    return load_users().get(make_uid(name, age), {})
-
-def toggle_topic(name, age, topic_name):
-    db  = load_users()
-    uid = make_uid(name, age)
-    if uid not in db: return
-    done = db[uid].get("completed", [])
-    if topic_name in done: done.remove(topic_name)
-    else: done.append(topic_name)
-    db[uid]["completed"] = done
-    # Award badges
-    badges = db[uid].get("badges", [])
-    if len(done) >= 5  and "First 5"    not in badges: badges.append("First 5")
-    if len(done) >= 10 and "10 Topics"  not in badges: badges.append("10 Topics")
-    if len(done) >= 25 and "25 Topics"  not in badges: badges.append("25 Topics")
-    db[uid]["badges"] = badges
-    save_users(db)
-
-def get_all_users_summary():
-    return list(load_users().values())
-
-
-# ── CLUSTERING ───────────────────────────────────────────────
-CLUSTERS = {
-    0: {"name":"Young Skill Builder",     "icon":"🚀","color":"#6366f1","bg":"#ede9fe",
-        "desc":"Teens and young adults building academic or technical skills"},
-    1: {"name":"Young Career Advancer",   "icon":"💼","color":"#0ea5e9","bg":"#e0f2fe",
-        "desc":"Young professionals growing entrepreneurship or career skills"},
-    2: {"name":"Mid-life Learner",        "icon":"📚","color":"#10b981","bg":"#d1fae5",
-        "desc":"Adults in 30s–40s exploring new education or business paths"},
-    3: {"name":"Mid-life Health Focus",   "icon":"💪","color":"#f59e0b","bg":"#fef3c7",
-        "desc":"Adults in 30s–40s focused on fitness and health management"},
-    4: {"name":"Senior Hobby Explorer",   "icon":"🎨","color":"#ec4899","bg":"#fce7f3",
-        "desc":"Older adults discovering hobbies and creative activities"},
-    5: {"name":"Senior Wellness Manager", "icon":"🧘","color":"#14b8a6","bg":"#ccfbf1",
-        "desc":"Older adults managing health, wellness and daily routines"},
-}
-
-def get_cluster(age, domain, level):
-    if   age >= 60: return 5 if domain == "Health" else 4
-    elif age >= 30: return 3 if domain == "Health" else 2
-    else:           return 1 if (domain == "Entrepreneurship" and level != "Beginner") else 0
-
-
-# ── RULE ENGINE ──────────────────────────────────────────────
-def apply_rules(topics, age, hrs, domain, goal, health):
-    hl, gl = health.lower(), goal.lower()
-    out = []
-    for t in topics:
-        nm = t["topic"].lower()
-        # Senior rule
-        if age >= 60 and domain == "Health":
-            if any(k in nm for k in ["hiit","powerlifting","marathon","olympic weightlifting","sprint","crossfit"]):
-                continue
-        # Time rule
-        if hrs <= 0.5 and t["duration"] > 12: continue
-        # Young + health
-        if age < 30 and domain == "Health":
-            if any(k in nm for k in ["geriatric","osteoporosis","fall prevention","senior fitness","elderly"]):
-                continue
-        # Health conditions
-        if any(k in hl for k in ["heart","cardiac"]):
-            if any(k in nm for k in ["hiit","marathon","powerlifting","high intensity","crossfit"]): continue
-        if any(k in hl for k in ["knee","joint"]):
-            if any(k in nm for k in ["running program","marathon","powerlifting","jumping","plyometric"]): continue
-        if any(k in hl for k in ["back","spine"]):
-            if any(k in nm for k in ["deadlift","powerlifting","heavy squat"]): continue
-        out.append(t)
-    # Goal prioritisation
-    gw = [w for w in gl.split() if len(w) > 3]
-    if gw:
-        pri  = [t for t in out if any(g in t["topic"].lower() for g in gw)]
-        rest = [t for t in out if t not in pri]
-        out  = pri + rest
-    return out
-
-
-# ── KNOWLEDGE GRAPH ──────────────────────────────────────────
-def build_graph_sorted(topics):
-    G, lk = nx.DiGraph(), {}
-    for t in topics:
-        G.add_node(t["id"], **t); lk[t["id"]] = t
-    for t in topics:
-        for p in t.get("prerequisites", []):
-            if p in lk: G.add_edge(p, t["id"])
-    try:    order = list(nx.topological_sort(G))
-    except: order = [t["id"] for t in topics]
-    return [lk[n] for n in order if n in lk], G
-
-
-# ── TIME ALLOCATION ──────────────────────────────────────────
-def allocate_weeks(topics, hrs):
-    hpw, cum, out = max(hrs * 7, 1.0), 0.0, []
-    for i, t in enumerate(topics):
-        cum += t["duration"]
-        tc   = dict(t)
-        tc["step"] = i + 1
-        tc["week"] = max(1, int(cum / hpw) + 1)
-        out.append(tc)
-    return out
-
-
-# ── TF-IDF RELATED ───────────────────────────────────────────
-def get_related_activities(domain, goal, kb, n=3):
-    items, labels = [], []
-    for d, levels in kb.items():
-        if d == domain: continue
-        for lvl, tops in levels.items():
-            for t in tops:
-                items.append(f"{t['topic']} {t.get('category','')}")
-                labels.append({"domain":d,"topic":t["topic"],"category":t.get("category",""),
-                                "level":lvl,"duration":t["duration"]})
-    if not items or not goal.strip(): return []
-    try:
-        corpus = items + [goal]
-        mat    = TfidfVectorizer(stop_words="english").fit_transform(corpus)
-        sims   = cosine_similarity(mat[-1], mat[:-1])[0]
-        top    = sims.argsort()[::-1][:n]
-        return [labels[i] for i in top if sims[i] > 0]
-    except: return []
-
-
-# ── AI RESOURCE LINKS ────────────────────────────────────────
-def get_resources(topic, domain, level):
-    q  = topic.replace(" ", "+")
-    ql = f"{topic}+{level}+tutorial".replace(" ", "+")
-    yt = "https://www.youtube.com/results?search_query="
-    base = [{"icon":"▶️","platform":"YouTube","title":f"{topic} — Video Tutorial",
-              "desc":f"Watch {level}-level lessons","url":f"{yt}{ql}"}]
-    extras = {
-        "Education":[
-            {"icon":"🎓","platform":"Khan Academy","title":f"{topic} on Khan Academy",
-             "desc":"Free structured lessons","url":f"https://www.khanacademy.org/search?page_search_query={q}"},
-            {"icon":"💻","platform":"Coursera","title":f"Coursera: {topic}",
-             "desc":"University-grade courses","url":f"https://www.coursera.org/search?query={q}"},
-            {"icon":"🆓","platform":"freeCodeCamp","title":f"freeCodeCamp: {topic}",
-             "desc":"Free coding bootcamp","url":f"{yt}freecodecamp+{q}+full+course"},
-        ],
-        "Entrepreneurship":[
-            {"icon":"💼","platform":"LinkedIn Learning","title":f"LinkedIn: {topic}",
-             "desc":"Professional business courses","url":f"https://www.linkedin.com/learning/search?keywords={q}"},
-            {"icon":"🚀","platform":"Udemy","title":f"Udemy: {topic}",
-             "desc":"Affordable courses","url":f"https://www.udemy.com/courses/search/?q={q}"},
-            {"icon":"📘","platform":"Harvard Business","title":f"HBS Online: {topic}",
-             "desc":"Business school insights","url":f"https://online.hbs.edu/search/#q={q}"},
-        ],
-        "Health":[
-            {"icon":"🏋️","platform":"YouTube Fitness","title":f"{topic} Workout Guide",
-             "desc":"Follow-along video sessions","url":f"{yt}{q}+workout+guide+for+beginners"},
-            {"icon":"🩺","platform":"Healthline","title":f"Healthline: {topic}",
-             "desc":"Evidence-based health info","url":f"https://www.healthline.com/?s={q}"},
-            {"icon":"🧘","platform":"Yoga/Wellness","title":f"{topic} — Wellness Video",
-             "desc":"Guided wellness content","url":f"{yt}{q}+health+tips+expert"},
-        ],
-        "Hobbies":[
-            {"icon":"🎨","platform":"YouTube Tutorial","title":f"{topic} — Step by Step",
-             "desc":"Hands-on hobby tutorials","url":f"{yt}{q}+step+by+step+for+beginners"},
-            {"icon":"✏️","platform":"Skillshare","title":f"Skillshare: {topic}",
-             "desc":"Creative skill classes","url":f"https://www.skillshare.com/en/search?query={q}"},
-            {"icon":"🌟","platform":"MasterClass","title":f"MasterClass: {topic}",
-             "desc":"Learn from world experts","url":f"https://www.masterclass.com/search?q={q}"},
-        ]
-    }
-    return (base + extras.get(domain, []))[:4]
-
-
-# ── MAIN ROADMAP GENERATOR ───────────────────────────────────
-def generate_roadmap(name, age, domain, goal, skill, hrs, health, kb):
-    cid   = get_cluster(age, domain, skill)
-    cinfo = CLUSTERS[cid]
-
-    lmap = {
-        "Beginner"    : ["Beginner"],
-        "Intermediate": ["Beginner","Intermediate"],
-        "Advanced"    : ["Beginner","Intermediate","Advanced"]
-    }
-    all_t = []
-    for lvl in lmap[skill]:
-        for t in kb.get(domain, {}).get(lvl, []):
-            tc = dict(t); tc["level"] = lvl; all_t.append(tc)
-
-    ordered, G = build_graph_sorted(all_t)
-    filtered   = apply_rules(ordered, age, hrs, domain, goal, health)
-
-    if skill == "Intermediate":
-        int_ids = {t["id"] for t in filtered if t.get("level") == "Intermediate"}
-        pre_ids = set()
-        for t in filtered:
-            if t.get("level") == "Intermediate":
-                for p in t.get("prerequisites", []): pre_ids.add(p)
-        bk       = {t["id"] for t in filtered if t.get("level") == "Beginner" and t["id"] in pre_ids}
-        filtered = [t for t in filtered if t["id"] in int_ids | bk]
-    elif skill == "Advanced":
-        ai       = {t["id"] for t in filtered if t.get("level") == "Advanced"}
-        filtered = [t for t in filtered if t["id"] in ai]
-
-    roadmap = allocate_weeks(filtered, hrs)
-    related = get_related_activities(domain, goal, kb, n=3)
-    total_h = sum(t["duration"] for t in roadmap)
-
-    return {
-        "roadmap"  : roadmap,
-        "cid"      : cid,
-        "cinfo"    : cinfo,
-        "related"  : related,
-        "G"        : G,
-        "total_h"  : round(total_h, 1),
-        "total_w"  : roadmap[-1]["week"] if roadmap else 0,
-        "total_t"  : len(roadmap),
-        "domain"   : domain,
-        "profile"  : {"name":name,"age":age,"domain":domain,"goal":goal,
-                      "skill":skill,"hrs":hrs,"health":health}
-    }
-'''
