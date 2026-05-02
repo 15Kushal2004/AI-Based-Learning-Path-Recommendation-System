@@ -3,41 +3,23 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from core.engine import get_user, load_users, save_users, make_uid, load_kb
 from core.sidebar import render_sidebar
+from utils.firebase_storage import (
+    clear_user_progress_firestore,
+    clear_user_roadmaps_firestore,
+    get_user_by_uid,
+)
 import streamlit as st
 
 st.set_page_config(page_title="Settings", page_icon="⚙️",
                    layout="wide", initial_sidebar_state="expanded")
 
-# ── INJECT CSS ──────────────────────────────────────────────
-st.markdown("""
-<style>
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@600;700;800&display=swap');
+# ── INJECT PREMIUM CSS ──────────────────────────────────────
+from ui.theme import PREMIUM_CSS
+st.markdown(PREMIUM_CSS, unsafe_allow_html=True)
 
-html, body, [class*="css"] {
-    font-family: 'Inter', sans-serif !important;
-    background: #f0f4ff !important;
-}
-.stApp { background: #f0f4ff !important; }
-
-/* Sidebar styling */
-[data-testid="stSidebar"] {
-    background: linear-gradient(180deg, #0f172a 0%, #1e1b4b 100%) !important;
-    min-width: 240px !important;
-}
-[data-testid="stSidebar"] * { color: #94a3b8 !important; }
-[data-testid="stSidebarContent"] { padding: 1rem 0.8rem !important; }
-
-/* Main content */
-.block-container { padding: 2rem 2.5rem 2rem 2.5rem !important; max-width: 100% !important; }
-#MainMenu, footer, header { visibility: hidden; }
-
-.card { background: white; border: 1.5px solid #e2e8f0; border-radius: 18px; padding: 22px; box-shadow: 0 1px 4px rgba(0,0,0,.05); margin-bottom: 16px; }
-.card-title { font-family: 'Plus Jakarta Sans', sans-serif; font-size: 1rem; font-weight: 700; color: #0f172a; margin-bottom: 4px; }
-.card-sub { font-size: .76rem; color: #64748b; margin-bottom: 16px; }
-
-.asuc { background: #dcfce7; border: 1.5px solid #bbf7d0; border-radius: 10px; padding: 12px 16px; margin: 10px 0; font-size: .82rem; color: #14532d; }
-</style>
-""", unsafe_allow_html=True)
+# ── AUTH GUARD ───────────────────────────────────────────────
+from utils.session_manager import auth_guard
+auth_guard()
 
 # ── RENDER SIDEBAR ───────────────────────────────────────────
 render_sidebar()
@@ -45,9 +27,57 @@ render_sidebar()
 name = st.session_state.get("name","Learner")
 age  = st.session_state.get("age",22)
 
+if "confirm_clear_progress" not in st.session_state:
+    st.session_state["confirm_clear_progress"] = False
+if "confirm_reset_roadmaps" not in st.session_state:
+    st.session_state["confirm_reset_roadmaps"] = False
+
+
+def clear_progress_data(current_name, current_age):
+    """Clear user progress from local and Firebase storage."""
+    # Clear local JSON progress
+    db = load_users()
+    local_uid = make_uid(current_name, current_age)
+    if local_uid in db:
+        db[local_uid]["completed"] = []
+        db[local_uid]["badges"] = []
+        save_users(db)
+
+    # Clear Firebase progress for logged-in users
+    firebase_uid = st.session_state.get("user_uid")
+    firebase_cleared = False
+    if firebase_uid:
+        try:
+            firebase_cleared = clear_user_progress_firestore(firebase_uid)
+        except Exception:
+            firebase_cleared = False
+
+    if firebase_uid and not firebase_cleared:
+        st.warning("Local progress cleared. Firebase clear failed, please try again.")
+    else:
+        st.success("Progress cleared successfully.")
+
+
+def clear_all_saved_roadmaps():
+    """Clear all saved roadmaps for the active account and local session."""
+    firebase_uid = st.session_state.get("user_uid")
+    if firebase_uid:
+        try:
+            ok = clear_user_roadmaps_firestore(firebase_uid)
+        except Exception:
+            ok = False
+        if not ok:
+            st.error("Could not clear saved roadmaps from your account.")
+            return
+
+    st.session_state["generated"] = False
+    st.session_state["result"] = None
+    st.session_state["all_roadmaps"] = []
+    st.success("All saved roadmaps were removed.")
+
 left, right = st.columns([1.5,1])
 with left:
-    st.markdown('<div class="card"><div class="card-title">👤 Profile Settings</div>', unsafe_allow_html=True)
+    st.markdown('<div class="card-title">👤 Profile Settings</div>', unsafe_allow_html=True)
     new_name = st.text_input("Display Name", value=name)
     new_goal = st.text_input("Learning Goal", value=st.session_state.get("goal",""))
     new_dom  = st.selectbox("Domain",["Education","Entrepreneurship","Health","Hobbies"],
@@ -56,22 +86,62 @@ with left:
     new_hlth = st.text_input("Health Condition", value=st.session_state.get("health",""))
     _, bc, _ = st.columns([2,2,2])
     with bc:
-        if st.button("💾 Save Settings", use_container_width=True):
+        if st.button("Save Settings", use_container_width=True):
             st.session_state.update({"name":new_name,"goal":new_goal,"domain":new_dom,"hrs":new_hrs,"health":new_hlth})
-            st.markdown('<div class="asuc">✅ Settings saved!</div>', unsafe_allow_html=True)
-    st.markdown('</div>', unsafe_allow_html=True)
-    st.markdown('<div class="card"><div class="card-title" style="color:#ef4444">⚠️ Danger Zone</div>', unsafe_allow_html=True)
-    if st.button("🗑️ Clear Progress"):
-        db=load_users(); uid=make_uid(name,age)
-        if uid in db: db[uid]["completed"]=[]; db[uid]["badges"]=[]; save_users(db)
-        st.success("Progress cleared.")
-    if st.button("🔄 Reset Roadmap"):
-        st.session_state.update({"generated":False,"result":None}); st.rerun()
-    st.markdown('</div>', unsafe_allow_html=True)
+            st.markdown('<div class="asuc">✅ Settings saved successfully!</div>', unsafe_allow_html=True)
+
+    
+    st.markdown('<div class="card-title" style="color:var(--error)">⚠️ Danger Zone</div>', unsafe_allow_html=True)
+    if st.button("Clear Progress"):
+        st.session_state["confirm_clear_progress"] = True
+
+    if st.session_state.get("confirm_clear_progress", False):
+        st.markdown(
+            '<div class="card" style="border:1px solid rgba(239,68,68,0.35);background:rgba(239,68,68,0.08)"><div class="card-title" style="color:#fca5a5">⚠️ Are you sure you want to clear your progress?</div><div style="font-size:.82rem;color:var(--text-secondary)">This will remove completed topics and badges from your account.</div></div>',
+            unsafe_allow_html=True,
+        )
+        c1, c2, _ = st.columns([1.2, 1.2, 3])
+        with c1:
+            if st.button("Yes, Clear Progress", key="confirm_clear_progress_btn", use_container_width=True):
+                clear_progress_data(name, age)
+                st.session_state["confirm_clear_progress"] = False
+                st.rerun()
+        with c2:
+            if st.button("Cancel", key="cancel_clear_progress_btn", use_container_width=True):
+                st.session_state["confirm_clear_progress"] = False
+                st.rerun()
+
+    if st.button("Reset Roadmap"):
+        st.session_state["confirm_reset_roadmaps"] = True
+
+    if st.session_state.get("confirm_reset_roadmaps", False):
+        st.markdown(
+            '<div class="card" style="border:1px solid rgba(239,68,68,0.35);background:rgba(239,68,68,0.08)"><div class="card-title" style="color:#fca5a5">🗑️ Remove all saved roadmaps?</div><div style="font-size:.82rem;color:var(--text-secondary)">This will delete every roadmap saved in your account and clear your Courses history.</div></div>',
+            unsafe_allow_html=True,
+        )
+        c1, c2, _ = st.columns([1.2, 1.2, 3])
+        with c1:
+            if st.button("Yes, Delete All", key="confirm_reset_roadmaps_btn", use_container_width=True):
+                clear_all_saved_roadmaps()
+                st.session_state["confirm_reset_roadmaps"] = False
+                st.rerun()
+        with c2:
+            if st.button("Cancel", key="cancel_reset_roadmaps_btn", use_container_width=True):
+                st.session_state["confirm_reset_roadmaps"] = False
+                st.rerun()
+
 
 with right:
     kb = load_kb()
-    st.markdown(f'<div class="card"><div class="card-title">ℹ️ System Info</div><div style="font-size:.82rem;color:#374151;line-height:1.8"><b>Version:</b> 2.0 Pro<br><b>Topics:</b> {sum(len(t) for d in kb.values() for t in d.values())}<br><b>Domains:</b> 4<br><b>AI Modules:</b> NetworkX · K-Means · TF-IDF · Rules<br><b>Storage:</b> Local JSON (SHA-256)</div></div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="card"><div class="card-title">ℹ️ System Info</div><div style="font-size:.82rem;color:var(--text-secondary);line-height:1.8"><b>Version:</b> 2.0 Pro<br><b>Topics:</b> {sum(len(t) for d in kb.values() for t in d.values())}<br><b>Domains:</b> 4<br><b>AI Modules:</b> NetworkX · K-Means · TF-IDF · Rules<br><b>Storage:</b> Firebase + Local JSON</div></div>', unsafe_allow_html=True)
     if st.session_state.get("generated"):
-        user=get_user(name,age); done=user.get("completed",[])
-        st.markdown(f'<div class="card"><div class="card-title">📊 Your Stats</div><div style="font-size:.82rem;color:#374151;line-height:1.8"><b>Completed:</b> {len(done)}<br><b>Sessions:</b> {user.get("sessions",0)}<br><b>Badges:</b> {", ".join(user.get("badges",[])) or "None yet"}<br><b>Last Seen:</b> {user.get("last_seen","")[:10]}</div></div>', unsafe_allow_html=True)
+        uid = st.session_state.get("user_uid")
+        if uid:
+            try:
+                user = get_user_by_uid(uid)
+            except Exception:
+                user = {}
+        else:
+            user = get_user(name, age)
+        done = user.get("completed",[])
+        st.markdown(f'<div class="card"><div class="card-title">📊 Your Stats</div><div style="font-size:.82rem;color:var(--text-secondary);line-height:1.8"><b>Completed:</b> {len(done)}<br><b>Sessions:</b> {user.get("sessions",0)}<br><b>Badges:</b> {", ".join(user.get("badges",[])) or "None yet"}<br><b>Last Seen:</b> {user.get("last_seen","")[:10]}</div></div>', unsafe_allow_html=True)
