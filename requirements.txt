@@ -1,5 +1,9 @@
 streamlit
+extra-streamlit-components
 scikit-learn
 pandas
 numpy
 networkx
+firebase-admin
+pyrebase4
+pillow
