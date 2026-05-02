@@ -1,0 +1,142 @@
+import json
+import os
+import random
+import re
+
+
+ROOT_DIR = os.path.dirname(os.path.dirname(__file__))
+KB_PATH = os.path.join(ROOT_DIR, "data", "knowledge_base.json")
+OUT_PATH = os.path.join(ROOT_DIR, "data", "training_pairs.jsonl")
+
+
+def tokenize(text):
+    return {w for w in re.findall(r"[a-zA-Z]+", (text or "").lower()) if len(w) >= 3}
+
+
+def topic_text(domain, level, topic):
+    return " ".join(
+        [
+            topic.get("topic", ""),
+            topic.get("description", ""),
+            topic.get("category", ""),
+            domain,
+            level,
+        ]
+    ).strip()
+
+
+def goal_templates(topic_name, category, domain):
+    return [
+        f"learn {topic_name}",
+        f"improve {category} skills",
+        f"become better at {topic_name}",
+        f"start with {category} in {domain}",
+        f"practical {topic_name} roadmap",
+        f"{topic_name} for beginners",
+        f"advanced {category} learning path",
+        f"master {topic_name} step by step",
+    ]
+
+
+def lexical_overlap(a, b):
+    ta = tokenize(a)
+    tb = tokenize(b)
+    if not ta or not tb:
+        return 0.0
+    return len(ta & tb) / len(ta | tb)
+
+
+def main():
+    random.seed(42)
+    with open(KB_PATH, encoding="utf-8") as f:
+        kb = json.load(f)
+
+    all_topics = []
+    for domain, levels in kb.items():
+        for level, topics in levels.items():
+            for t in topics:
+                all_topics.append(
+                    {
+                        "id": t.get("id"),
+                        "domain": domain,
+                        "level": level,
+                        "category": t.get("category", "General"),
+                        "topic": t.get("topic", ""),
+                        "description": t.get("description", ""),
+                    }
+                )
+
+    rows = []
+    for anchor in all_topics:
+        pos_pool = [
+            x
+            for x in all_topics
+            if x["domain"] == anchor["domain"] and x["category"] == anchor["category"]
+        ]
+        neg_same_domain = [
+            x
+            for x in all_topics
+            if x["domain"] == anchor["domain"] and x["category"] != anchor["category"]
+        ]
+        neg_other_domain = [x for x in all_topics if x["domain"] != anchor["domain"]]
+
+        positives = random.sample(pos_pool, min(5, len(pos_pool)))
+        negatives = random.sample(neg_same_domain, min(5, len(neg_same_domain)))
+        negatives += random.sample(neg_other_domain, min(5, len(neg_other_domain)))
+
+        for goal in goal_templates(anchor["topic"], anchor["category"], anchor["domain"]):
+            gtok = tokenize(goal)
+
+            for p in positives:
+                rows.append(
+                    {
+                        "goal": goal,
+                        "topic_text": topic_text(p["domain"], p["level"], p),
+                        "label": 1,
+                        "meta": {
+                            "goal_domain": anchor["domain"],
+                            "goal_category": anchor["category"],
+                            "topic_id": p["id"],
+                        },
+                    }
+                )
+
+            hard_negatives = sorted(
+                negatives,
+                key=lambda x: lexical_overlap(goal, topic_text(x["domain"], x["level"], x)),
+                reverse=True,
+            )[:8]
+
+            for n in hard_negatives:
+                n_text = topic_text(n["domain"], n["level"], n)
+                overlap = len(gtok & tokenize(n_text))
+                # Keep harder negatives when there is lexical overlap.
+                if overlap == 0 and random.random() < 0.2:
+                    continue
+                rows.append(
+                    {
+                        "goal": goal,
+                        "topic_text": n_text,
+                        "label": 0,
+                        "meta": {
+                            "goal_domain": anchor["domain"],
+                            "goal_category": anchor["category"],
+                            "topic_id": n["id"],
+                        },
+                    }
+                )
+
+    random.shuffle(rows)
+    os.makedirs(os.path.dirname(OUT_PATH), exist_ok=True)
+    with open(OUT_PATH, "w", encoding="utf-8") as f:
+        for r in rows:
+            f.write(json.dumps(r, ensure_ascii=False) + "\n")
+
+    pos = sum(1 for r in rows if r["label"] == 1)
+    neg = len(rows) - pos
+    print(f"Wrote {len(rows)} pairs to {OUT_PATH}")
+    print(f"Positive: {pos}, Negative: {neg}")
+
+
+if __name__ == "__main__":
+    main()
