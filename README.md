@@ -1,4 +1,4 @@
-# 🤖 AI Learning Path Generator
+# 🤖 AI Based Learning Path Recommendation System
 An AI-driven, interactive platform designed to construct dynamically personalized curriculum maps, track user milestones, and deliver structured educational pathways. 
 
 ## 📂 Project Architecture
