@@ -5,14 +5,14 @@ import json
 import firebase_admin
 from firebase_admin import credentials, firestore, auth as admin_auth
 import pyrebase
-
-# ── Paths ─────────────────────────────────────────────────────
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-CRED_FILE = os.path.join(BASE_DIR, "firebase_credentials.json")
+import streamlit as st
 
 # ── Firebase Admin SDK (Firestore + User Management) ─────────
 if not firebase_admin._apps:
-    cred = credentials.Certificate(CRED_FILE)
+    firebase_config = dict(st.secrets["firebase"])
+    firebase_config["private_key"] = firebase_config["private_key"].replace("\\n", "\n")
+
+    cred = credentials.Certificate(firebase_config)
     firebase_admin.initialize_app(cred)
 
 # Firestore client
