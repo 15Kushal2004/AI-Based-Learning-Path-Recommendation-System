@@ -7,3 +7,4 @@ networkx
 firebase-admin
 pyrebase4
 pillow
+sentence-transformers
