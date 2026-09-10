@@ -17,9 +17,6 @@ from utils.firebase_storage import (save_roadmap, get_user_by_uid,
                                       get_all_users_firestore,
                                       get_all_user_roadmaps)
 
-# Testing
-import wandb
-wandb.init(project="ai-learning-path", name="test-run")
 
 st.set_page_config(
     page_title="LearnPath AI — Dashboard",
@@ -221,13 +218,7 @@ if gen:
 
         completion_rate = 0
 
-        import wandb
-        wandb.log({
-            "goal_match": goal_match,
-            "relevance_score": relevance,
-            "completion_rate": completion_rate,
-            "num_topics": len(result["roadmap"])
-        })
+      
 
         # ✅ existing logic
         st.session_state.update({
