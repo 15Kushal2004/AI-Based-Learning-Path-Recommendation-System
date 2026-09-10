@@ -1,3 +1,17 @@
+---
+title: AI-Learning-Path-Roadmap
+emoji: 🚀
+colorFrom: blue
+colorTo: indigo
+sdk: streamlit
+sdk_version: 1.42.0
+app_file: app.py
+pinned: false
+---
+
+
+
+
 # 🤖 AI Based Learning Path Recommendation System
 An AI-driven, interactive platform designed to construct dynamically personalized curriculum maps, track user milestones, and deliver structured educational pathways. 
 
